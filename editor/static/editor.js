@@ -13,7 +13,7 @@ const COLORS = {
   ball: "#30a46c",
   selected: "#ffd60a",
 };
-const MAX_CANVAS_W = 1100;
+const NEIGHBOR_H = 150;      // px, drawing height of the prev/next frames
 const HANDLE_SIZE = 8;       // px, canvas space
 const HANDLE_HIT = 7;        // px hit radius, canvas space
 const MIN_DRAG = 5;          // px, canvas space, to count as a new box
@@ -541,23 +541,28 @@ function onKeyDown(ev) {
 
 // ---- canvas sizing --------------------------------------------------------
 function sizeCanvases() {
-  const w = Math.min(MAX_CANVAS_W, state.meta.width);
-  state.scale = w / state.meta.width;
-  const h = Math.round(state.meta.height * state.scale);
-  el.mainCanvas.width = w;
-  el.mainCanvas.height = h;
+  const meta = state.meta;
 
-  // neighbor canvases: fit their column (fixed 320px column, ~300px content)
-  const nw = 300;
-  const nscale = nw / state.meta.width;
-  const nh = Math.round(state.meta.height * nscale);
-  for (const c of [el.prevCanvas, el.nextCanvas]) { c.width = nw; c.height = nh; }
+  // Current frame: fit as large as possible within its wrapper, preserving
+  // aspect ratio (limited by whichever of width/height runs out first).
+  const wrap = el.canvasWrap;
+  const availW = wrap.clientWidth || Math.round(window.innerWidth * 0.6);
+  const availH = wrap.clientHeight || Math.round(window.innerHeight * 0.6);
+  const scale = Math.min(availW / meta.width, availH / meta.height);
+  el.mainCanvas.width = Math.max(1, Math.floor(meta.width * scale));
+  el.mainCanvas.height = Math.max(1, Math.floor(meta.height * scale));
+  state.scale = el.mainCanvas.width / meta.width;
+
+  // Neighbor frames: small, sized by a fixed drawing height.
+  const nscale = NEIGHBOR_H / meta.height;
+  const nw = Math.round(meta.width * nscale);
+  for (const c of [el.prevCanvas, el.nextCanvas]) { c.width = nw; c.height = NEIGHBOR_H; }
 }
 
 // ---- init -----------------------------------------------------------------
 async function init() {
   const ids = ["prevBtn", "nextBtn", "frameLabel", "jumpInput", "videoName", "saveStatus",
-    "prevCanvas", "nextCanvas", "mainCanvas", "boxList", "metaForm", "noSelection",
+    "prevCanvas", "nextCanvas", "mainCanvas", "canvasWrap", "boxList", "metaForm", "noSelection",
     "playerFields", "ballFields", "trackIdInput", "ballState", "kickPlayerId",
     "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn"];
   for (const id of ids) el[id] = document.getElementById(id);
@@ -587,7 +592,17 @@ async function init() {
   // flush a pending save if the user closes/reloads the tab
   window.addEventListener("beforeunload", () => { if (state.dirty) flushSave(); });
 
+  // re-fit the current frame when the window resizes
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { sizeCanvases(); renderAll(); }, 100);
+  });
+
   await loadFrame(0);
+  // re-fit once the grid has settled around the loaded content, then repaint.
+  sizeCanvases();
+  renderAll();
 }
 
 init();
