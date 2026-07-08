@@ -7,6 +7,7 @@ from player_ball_assigner import PlayerBallAssigner
 from camera_movement_estimator import CameraMovementEstimator
 from view_transformer import ViewTransformer
 from speed_and_distance_estimator import SpeedAndDistance_Estimator
+from tracking_output import generate_tracking_json
 
 
 def main():
@@ -82,6 +83,14 @@ def main():
 
     # Save video
     save_video(output_video_frames, 'output_videos/output_video.avi')
+
+    # Save tracking data as JSON (center-origin metric coordinates, players only)
+    generate_tracking_json(
+        tracks,
+        view_transformer,
+        camera_movement_per_frame,
+        'output_videos/tracking_data.json'
+    )
 
 if __name__ == '__main__':
     main()

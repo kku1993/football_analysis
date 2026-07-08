@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+  "required": [
+    "frames",
+    "players"
+  ],
+  "properties": {
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ball": {
+            "type": "object",
+            "description": "Position of the ball",
+            "properties": {
+              "x": {
+                "type": "number",
+                "description": "Meters from center of pitch"
+              },
+              "y": {
+                "type": "number",
+                "description": "Meters from center of pitch"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "Active",
+                  "Goal",
+                  "OutOfBounds"
+                ]
+              },
+              "kick": {
+                "description": "Describes the ball being kicked",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "byPlayerId": {
+                        "type": "string",
+                        "description": "Player who kicked the ball"
+                      }
+                    },
+                    "required": [
+                      "byPlayerId"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "toPlayerId": {
+                        "type": "string",
+                        "description": "Player who received the ball"
+                      }
+                    },
+                    "required": [
+                      "toPlayerId"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "state"
+            ]
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": ""
+                },
+                "team": {
+                  "type": "string",
+                  "enum": [
+                    "Defence",
+                    "Offence"
+                  ]
+                },
+                "x": {
+                  "type": "number",
+                  "description": "meters from center of pitch"
+                },
+                "y": {
+                  "type": "number",
+                  "description": "meters from center of pitch"
+                }
+              },
+              "required": [
+                "id",
+                "team",
+                "x",
+                "y"
+              ]
+            }
+          }
+        },
+        "required": [
+          "ball",
+          "players"
+        ]
+      }
+    },
+    "players": {
+      "type": "array",
+      "description": "List of all players that appear across frames",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Player id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "Outfield",
+              "GoalKeeper"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role"
+        ]
+      }
+    }
+  }
+}
