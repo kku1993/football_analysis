@@ -11,7 +11,7 @@ from speed_and_distance_estimator import SpeedAndDistance_Estimator
 
 def main():
     # Read Video
-    video_frames = read_video('input_videos/08fd33_4.mp4')
+    video_frames = read_video('input_videos/arg-egy-14_57-goal.mp4')
 
     # Initialize Tracker
     tracker = Tracker('models/best.pt')
@@ -45,7 +45,7 @@ def main():
     team_assigner = TeamAssigner()
     team_assigner.assign_team_color(video_frames[0], 
                                     tracks['players'][0])
-    
+
     for frame_num, player_track in enumerate(tracks['players']):
         for player_id, track in player_track.items():
             team = team_assigner.get_player_team(video_frames[frame_num],   
