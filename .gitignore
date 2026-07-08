@@ -1,2 +1,5 @@
 *__pycahce__*
 *.pyc
+venv/
+models/
+input_videos/
