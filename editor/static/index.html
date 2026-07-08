@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracking Editor</title>
+  <link rel="stylesheet" href="/static/editor.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="nav">
+      <button id="prevBtn" title="Previous frame (←)">◀ Prev</button>
+      <span id="frameLabel">Frame 0 / 0</span>
+      <button id="nextBtn" title="Next frame (→)">Next ▶</button>
+    </div>
+    <div class="jump">
+      <label for="jumpInput">Jump to</label>
+      <input id="jumpInput" type="number" min="0" step="1" value="0">
+    </div>
+    <div class="status">
+      <span id="videoName"></span>
+      <span id="saveStatus" class="saved">saved</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="neighbors">
+      <div class="neighbor">
+        <div class="neighbor-label">Previous frame</div>
+        <canvas id="prevCanvas"></canvas>
+      </div>
+      <div class="neighbor">
+        <div class="neighbor-label">Next frame</div>
+        <canvas id="nextCanvas"></canvas>
+      </div>
+    </div>
+
+    <div id="center">
+      <canvas id="mainCanvas"></canvas>
+      <p class="hint">Drag on empty space to create a box · click to select · drag to move · drag a handle to resize · Delete to remove</p>
+    </div>
+
+    <aside id="sidebar">
+      <section id="boxListSection">
+        <h2>Boxes in this frame</h2>
+        <ul id="boxList"></ul>
+      </section>
+
+      <section id="formSection">
+        <h2>Selected box</h2>
+        <div id="noSelection" class="muted">No box selected.</div>
+
+        <form id="metaForm" class="hidden">
+          <div class="field">
+            <label>Type</label>
+            <div class="radio-row">
+              <label><input type="radio" name="boxType" value="player"> Player</label>
+              <label><input type="radio" name="boxType" value="ball" id="ballTypeRadio"> Ball</label>
+            </div>
+          </div>
+
+          <div id="playerFields">
+            <div class="field">
+              <label for="trackIdInput">Track ID</label>
+              <input id="trackIdInput" type="text" autocomplete="off">
+              <div id="dupWarn" class="warn hidden"></div>
+            </div>
+            <div class="field">
+              <label>Team</label>
+              <div class="radio-row">
+                <label><input type="radio" name="team" value="Offence"> Offence</label>
+                <label><input type="radio" name="team" value="Defence"> Defence</label>
+              </div>
+            </div>
+          </div>
+
+          <div id="ballFields" class="hidden">
+            <div class="field">
+              <label for="ballState">State</label>
+              <select id="ballState">
+                <option value="Active">Active</option>
+                <option value="Goal">Goal</option>
+                <option value="OutOfBounds">OutOfBounds</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Kick</label>
+              <div class="radio-row">
+                <label><input type="radio" name="kick" value="none"> None</label>
+                <label><input type="radio" name="kick" value="by"> Kicked by</label>
+                <label><input type="radio" name="kick" value="to"> Received by</label>
+              </div>
+              <input id="kickPlayerId" type="text" list="frameIds" placeholder="player id" autocomplete="off" disabled>
+              <datalist id="frameIds"></datalist>
+            </div>
+          </div>
+
+          <button type="button" id="deleteBtn" class="danger">Delete box</button>
+        </form>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/static/editor.js"></script>
+</body>
+</html>

@@ -4,3 +4,4 @@ venv/
 models/
 input_videos/
 output_videos/
+editor_data/
