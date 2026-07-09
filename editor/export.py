@@ -92,6 +92,49 @@ def _to_center_coords(point, offset):
     return (point[0] - cx, point[1] - cy)
 
 
+def _clip_to_pitch(point):
+    """Clamp a corner-origin metric (x,y) into the pitch rectangle.
+
+    Corner-origin metric runs 0..PITCH_LENGTH in x and 0..PITCH_WIDTH in y, so a
+    projected point beyond the touchlines / goal lines (typical for a box that
+    was extrapolated from outside the calibration region) is pulled back onto the
+    nearest boundary rather than reported meters off the field.
+    """
+    x = min(max(point[0], 0.0), PITCH_LENGTH)
+    y = min(max(point[1], 0.0), PITCH_WIDTH)
+    return (x, y)
+
+
+def _player_box_position(view_transformer, bbox, cam_offset, offset):
+    """Corner-origin metric position for a player box.
+
+    Projects all four box corners onto the pitch plane (raw/unfiltered, so boxes
+    outside the calibration region still extrapolate) and returns the one whose
+    pitch position is closest to the pitch CENTER. For a box straddling the
+    boundary this biases inward, giving a more conservative estimate than the
+    bottom-center foot point. The winner is then clipped into the pitch.
+
+    Note: the homography assumes points lie on the ground plane, which is only
+    true for the two *bottom* corners (the feet); the top corners are the head
+    and project as if they were on the ground. They are still considered here
+    because the request is "the corner closest to pitch center", but in practice
+    the nearest-to-center corner is almost always a bottom one.
+    """
+    x1, y1, x2, y2 = bbox
+    dx, dy = cam_offset
+    corners = ((x1, y1), (x2, y1), (x1, y2), (x2, y2))
+    best = None
+    best_d = None
+    for px, py in corners:
+        raw = _raw_transform(view_transformer, [px - dx, py - dy])
+        cx, cy = _to_center_coords(raw, offset)
+        d = cx * cx + cy * cy   # squared distance to pitch center (0,0)
+        if best_d is None or d < best_d:
+            best_d = d
+            best = raw
+    return _clip_to_pitch(best)
+
+
 def _interpolate_gaps(positions):
     """Linearly interpolate interior None gaps in a list of (x,y) | None.
 
@@ -185,12 +228,11 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     cam = _camera_movement(video_path, n)
 
     # --- Players: per-track top-left-origin metric position, then interpolate.
-    # Uses the raw (unfiltered) transform so a player standing outside the
-    # calibration polygon still gets metric coordinates: the homography encodes
-    # the camera angle fitted from the calibration region, and extrapolating it
-    # projects off-region boxes onto the same pitch plane. (Same treatment as the
-    # ball below.) Extrapolation degrades with distance from the calibrated
-    # trapezoid, but it is preferable to silently dropping the player.
+    # Position comes from the box corner nearest the pitch center, projected with
+    # the raw (unfiltered) transform so a player outside the calibration polygon
+    # still gets metric coordinates: the homography encodes the camera angle
+    # fitted from the calibration region, and extrapolating it projects off-region
+    # boxes onto the same pitch plane. The result is clipped into the pitch.
     player_pos = {}     # tid -> [ (x,y)|None ] * n
     player_team = {}    # tid -> "Offence"|"Defence"
     player_role = {}    # tid -> "GoalKeeper" if marked GK in ANY frame, else "Outfield"
@@ -203,10 +245,8 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
             else:
                 player_role.setdefault(tid, "Outfield")
             seq = player_pos.setdefault(tid, [None] * n)
-            x1, y1, x2, y2 = p["bbox"]
-            foot = [(x1 + x2) / 2.0 - cam[f][0], y2 - cam[f][1]]
-            raw = _raw_transform(vt, foot)   # unfiltered: extrapolate off-region via homography
-            seq[f] = (float(raw[0]), float(raw[1]))
+            pos = _player_box_position(vt, p["bbox"], cam[f], offset)
+            seq[f] = (float(pos[0]), float(pos[1]))
     for tid in player_pos:
         player_pos[tid] = _interpolate_gaps(player_pos[tid])
 
