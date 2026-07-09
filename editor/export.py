@@ -5,13 +5,26 @@ Run as::
     venv/bin/python -m editor.export [-o output_videos/tracking_data.json]
 
 Converts the editor's pixel-space working file (``editor_data/annotations.json``)
-into the metric JSON described by ``tracking-schema.json``. Coordinates are in
-meters from the pitch center: (0,0) = center, -x left / +x right, -y up / +y down.
+into the metric JSON described by ``tracking-schema.json``.
+
+COORDINATE SYSTEM: meters from the CENTER of a standard 105 m x 68 m pitch.
+``(0, 0)`` is the pitch center; ``-x`` is toward the left goal, ``+x`` toward the
+right goal; ``-y`` toward the top touchline, ``+y`` toward the bottom touchline.
+
+The ``ViewTransformer`` homography maps the image onto the pitch plane, in real
+meters, but with its origin at the near goal-line / top-touchline *corner* of the
+pitch (its ``target_vertices`` run 0..length along x and 0..width along y from
+that corner). We therefore shift by half a pitch (``PITCH_LENGTH/2`` in x,
+``PITCH_WIDTH/2`` in y) to move the origin to the pitch center. This assumes the
+transform's ``(0,0)`` corner really is a pitch corner (goal line x touchline) --
+true for the sample calibration (the visible trapezoid starts at the left goal
+line and spans the full width), and it is what a per-camera recalibration should
+preserve.
 
 Adapted from the deleted ``tracking_output.py`` (``git show
-5ad880f:tracking_output.py``), which already solved metric conversion,
-center-origin offset and gap interpolation; here we read boxes from
-``annotations.json`` instead of the pipeline's ``tracks``.
+5ad880f:tracking_output.py``), which already solved metric conversion and gap
+interpolation; here we read boxes from ``annotations.json`` instead of the
+pipeline's ``tracks``, and reference the origin to the true pitch center.
 
 GENERALIZATION CAVEAT: the metric conversion is only as good as
 ``ViewTransformer.pixel_vertices``, a hardcoded calibration for the SAMPLE
@@ -40,6 +53,12 @@ from editor.generate import ANNOTATIONS_PATH
 
 DEFAULT_OUTPUT = os.path.join("output_videos", "tracking_data.json")
 
+# Standard soccer pitch dimensions (meters). x = length (goal to goal),
+# y = width (touchline to touchline). Used to place the coordinate origin at the
+# pitch center; see the module docstring's COORDINATE SYSTEM note.
+PITCH_LENGTH = 105.0
+PITCH_WIDTH = 68.0
+
 
 # --- metric helpers (from the recovered tracking_output.py) ----------------
 def _raw_transform(view_transformer, point):
@@ -56,11 +75,16 @@ def _raw_transform(view_transformer, point):
     return dst.reshape(-1, 2)[0].tolist()
 
 
-def _center_offset(view_transformer):
-    """(cx, cy) offset converting top-left-origin metric -> pitch-center origin."""
-    verts = np.array(view_transformer.target_vertices, dtype=np.float32)
-    xs, ys = verts[:, 0], verts[:, 1]
-    return (float((xs.min() + xs.max()) / 2.0), float((ys.min() + ys.max()) / 2.0))
+def _center_offset():
+    """(cx, cy) offset converting corner-origin metric -> pitch-CENTER origin.
+
+    The ViewTransformer's metric plane has its origin at the near goal-line /
+    top-touchline corner of the pitch (real meters). The pitch center is half a
+    pitch length/width from that corner, so subtracting (PITCH_LENGTH/2,
+    PITCH_WIDTH/2) recenters to (0,0) at the pitch center. See the module
+    docstring for the coordinate system and the calibration assumption.
+    """
+    return (PITCH_LENGTH / 2.0, PITCH_WIDTH / 2.0)
 
 
 def _to_center_coords(point, offset):
@@ -157,7 +181,7 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     n = len(frames)
 
     vt = ViewTransformer()
-    offset = _center_offset(vt)
+    offset = _center_offset()
     cam = _camera_movement(video_path, n)
 
     # --- Players: per-track top-left-origin metric position, then interpolate.

@@ -85,13 +85,23 @@ venv/bin/python -m editor.export [-o output_videos/tracking_data.json]
 ```
 
 Converts the pixel-space `annotations.json` into the metric JSON described by
-`tracking-schema.json` (meters from pitch center). Player foot positions and the
-ball center are camera-motion-adjusted and run through `ViewTransformer`;
-interior gaps are interpolated; ball state and kick pass through from your edits.
+`tracking-schema.json`. Player foot positions and the ball center are
+camera-motion-adjusted and run through `ViewTransformer`; interior gaps are
+interpolated; ball state and kick pass through from your edits.
+
+**Coordinate system:** meters from the **center of a standard 105 m × 68 m
+pitch**. `(0, 0)` is the pitch center; `-x` toward the left goal, `+x` toward the
+right goal; `-y` toward the top touchline, `+y` toward the bottom touchline. The
+`ViewTransformer` homography yields real meters with its origin at the near
+goal-line/touchline pitch corner, so the exporter subtracts half a pitch
+(`PITCH_LENGTH/2`, `PITCH_WIDTH/2`) to recenter to the pitch center.
 
 **Calibration caveat:** the metric conversion depends on
 `ViewTransformer.pixel_vertices`, which is calibrated for the sample video's
-camera view. The editor itself (steps 1–2) is fully video-agnostic, but this
+camera view (a trapezoid from the left goal line spanning ~23 m of length × the
+full 68 m width). The recentering assumes that trapezoid's near corner is a true
+pitch corner. The editor itself (steps 1–2) is fully video-agnostic, but this
 export step must be recalibrated per camera setup — exactly as `main.py` already
-requires. Goalkeepers are exported as `role: "Outfield"` (the tracker does not
-preserve the goalkeeper class).
+requires. Players whose foot position falls outside the calibrated trapezoid have
+no valid metric position and are omitted from a frame (and, if never on it, from
+the top-level `players` list).
