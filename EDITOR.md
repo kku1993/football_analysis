@@ -61,9 +61,19 @@ boxes. For each frame you can:
 - **Select** a box by clicking it (or a row in the sidebar box list).
 - **Move** a selected box by dragging it; **resize** via its 8 handles.
 - **Delete** the selected box with the Delete/Backspace key.
-- Edit metadata in the sidebar: player track id + team (Offence/Defence), or ball
-  state (Active/Goal/OutOfBounds) and kick (none / kicked-by / received-by a
-  player id). Switch a box between Player and Ball with the type selector.
+- Edit metadata in the sidebar: player track id + team (Offence/Defence),
+  goalkeeper flag, or ball state (Active/Goal/OutOfBounds) and kick (none /
+  kicked-by / received-by a player id). Switch a box between Player and Ball with
+  the type selector.
+
+**Attribute edits persist forward.** Editing a *persistent* box attribute —
+player team, goalkeeper, track id (a rename), or ball state — applies it to the
+current frame **and every subsequent frame** (players are matched by track id;
+ball state to each later frame that has a ball), so you correct it once rather
+than on every frame. Bounding-box position/size are per-frame by nature, and the
+ball **kick** is an instantaneous event, so those are *not* propagated. The
+top-bar **⇄ Invert teams** button swaps Offence/Defence for every player in every
+frame at once.
 
 Edits autosave per frame (a debounced `PUT`, written atomically to
 `annotations.json`); the header shows a saved / saving / error indicator.

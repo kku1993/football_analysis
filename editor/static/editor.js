@@ -34,6 +34,7 @@ const state = {
   prevFrame: null,
   nextFrame: null,
   selected: null,    // { type:'player', index:int } | { type:'ball' } | null
+  selectedTrackId: null,  // committed track_id of the selected player (for rename propagation)
   mode: "idle",      // idle | drawing | moving | resizing
   drag: null,        // per-mode scratch data (image coords)
   images: new Map(),  // idx -> Image
@@ -362,6 +363,7 @@ function syncForm() {
     el.kickPlayerId.disabled = (kick === "none");
   } else {
     const p = state.frame.players[sel.index];
+    state.selectedTrackId = p.track_id;   // committed id, for rename propagation
     el.trackIdInput.value = p.track_id;
     el.metaForm.team.value = p.team;
     el.gkCheck.checked = (p.role === "GoalKeeper");
@@ -410,65 +412,121 @@ function maxIdInFrame() {
   return mx;
 }
 
-function onFormInput() {
+// Live text typing in the form: updates the CURRENT frame only (no propagation).
+function onFormInputLive(e) {
   const sel = state.selected;
   if (!sel) return;
+  const t = e.target;
+  if (t && t.name === "boxType") return;            // handled on 'change'
+  if (sel.type === "player") {
+    if (t === el.trackIdInput) checkDuplicateId();  // rename commits on 'change'
+  } else if (state.frame.ball) {
+    if (t === el.kickPlayerId) applyKickFromForm(); // per-frame event
+  }
+}
+
+// Discrete attribute commits. Persistent attributes (player team / role /
+// track_id, ball state) are applied to the current frame AND propagated to
+// every subsequent frame. Per-frame edits (ball kick event, box-type
+// conversion) apply to the current frame only.
+async function onFormChange(e) {
+  const sel = state.selected;
+  if (!sel) return;
+  const t = e.target;
+  if (t.name === "boxType") { onBoxTypeChange(); return; }
+
   if (sel.type === "player") {
     const p = state.frame.players[sel.index];
-    p.track_id = el.trackIdInput.value.trim() || p.track_id;
-    p.team = el.metaForm.team.value;
-    checkDuplicateId();
-  } else {
+    if (t.name === "team") {
+      p.team = el.metaForm.team.value;
+      renderAll();
+      await applyPlayerAttrForward(p.track_id, { team: p.team });
+    } else if (t === el.gkCheck) {
+      p.role = el.gkCheck.checked ? "GoalKeeper" : "Outfield";
+      renderAll();
+      await applyPlayerAttrForward(p.track_id, { role: p.role });
+    } else if (t === el.trackIdInput) {
+      const oldId = state.selectedTrackId;
+      const newId = el.trackIdInput.value.trim();
+      if (!newId || newId === oldId) { el.trackIdInput.value = oldId; return; }
+      p.track_id = newId;
+      state.selectedTrackId = newId;
+      renderAll();
+      // match the OLD id in later frames and rename it to the new id
+      await applyPlayerAttrForward(oldId, { track_id: newId });
+    }
+  } else if (state.frame.ball) {
     const b = state.frame.ball;
-    b.state = el.ballState.value;
-    const kick = el.metaForm.kick.value;
-    el.kickPlayerId.disabled = (kick === "none");
-    if (kick === "none") b.kick = null;
-    else if (kick === "by") b.kick = { byPlayerId: el.kickPlayerId.value.trim() };
-    else b.kick = { toPlayerId: el.kickPlayerId.value.trim() };
+    if (t === el.ballState) {
+      b.state = el.ballState.value;
+      renderAll();
+      await applyBallAttrForward({ state: b.state });
+    } else if (t.name === "kick") {
+      applyKickFromForm();
+    }
   }
+}
+
+// Ball kick is an instantaneous event -> current frame only, not propagated.
+function applyKickFromForm() {
+  const b = state.frame.ball;
+  if (!b) return;
+  const kick = el.metaForm.kick.value;
+  el.kickPlayerId.disabled = (kick === "none");
+  if (kick === "none") b.kick = null;
+  else if (kick === "by") b.kick = { byPlayerId: el.kickPlayerId.value.trim() };
+  else b.kick = { toPlayerId: el.kickPlayerId.value.trim() };
   renderAll();
   markDirty();
 }
 
-// Marking a player box as goalkeeper sets its role on this frame AND persists
-// that role through every subsequent frame (by track_id).
-async function onRoleToggle() {
-  const sel = state.selected;
-  if (!sel || sel.type !== "player") return;
-  const p = state.frame.players[sel.index];
-  const role = el.gkCheck.checked ? "GoalKeeper" : "Outfield";
-  p.role = role;
-  renderAll();
+// The current frame's box was already updated locally; persist it and push the
+// same attribute(s) to all subsequent frames.
+async function applyPlayerAttrForward(matchId, attrs) {
   markDirty();
-
   if (state.idx + 1 < state.meta.frame_count) {
-    await flushSave();                                 // persist this frame first
-    await setRoleFrom(p.track_id, role, state.idx + 1);  // apply to later frames
-    state.nextFrame = await fetchFrame(state.idx + 1);   // refresh next-frame preview
+    await flushSave();
+    await postJSON("/api/propagate", {
+      target: "player", track_id: matchId, attrs, from_frame: state.idx + 1,
+    });
+    state.nextFrame = await fetchFrame(state.idx + 1);
     renderAll();
   }
 }
 
-async function setRoleFrom(tid, role, fromFrame) {
+async function applyBallAttrForward(attrs) {
+  markDirty();
+  if (state.idx + 1 < state.meta.frame_count) {
+    await flushSave();
+    await postJSON("/api/propagate", {
+      target: "ball", attrs, from_frame: state.idx + 1,
+    });
+    state.nextFrame = await fetchFrame(state.idx + 1);
+    renderAll();
+  }
+}
+
+async function postJSON(url, body) {
   setSaveStatus("saving");
   try {
-    const r = await fetch("/api/set_role", {
+    const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ track_id: tid, role, from_frame: fromFrame }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) {
       const msg = (await r.json().catch(() => ({}))).error || r.status;
       setSaveStatus("error");
-      el.saveStatus.title = `Role update failed: ${msg}`;
-      return;
+      el.saveStatus.title = `Update failed: ${msg}`;
+      return false;
     }
     setSaveStatus("saved");
     el.saveStatus.title = "";
+    return true;
   } catch (e) {
     setSaveStatus("error");
-    el.saveStatus.title = `Role update failed: ${e}`;
+    el.saveStatus.title = `Update failed: ${e}`;
+    return false;
   }
 }
 
@@ -690,15 +748,8 @@ async function init() {
   el.jumpInput.onchange = () => loadFrame(parseInt(el.jumpInput.value, 10) || 0);
   el.invertBtn.onclick = invertTeams;
 
-  el.metaForm.addEventListener("input", (e) => {
-    if (e.target.name === "boxType") onBoxTypeChange();
-    else if (e.target.id === "gkCheck") { /* handled by the change listener below */ }
-    else onFormInput();
-  });
-  el.metaForm.addEventListener("change", (e) => {
-    if (e.target.name === "boxType") onBoxTypeChange();
-  });
-  el.gkCheck.addEventListener("change", onRoleToggle);
+  el.metaForm.addEventListener("input", onFormInputLive);
+  el.metaForm.addEventListener("change", onFormChange);
   el.deleteBtn.onclick = deleteSelected;
 
   // flush a pending save if the user closes/reloads the tab

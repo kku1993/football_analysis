@@ -255,31 +255,59 @@ def invert_teams():
     return jsonify({"ok": True, "changed": changed})
 
 
-@app.route("/api/set_role", methods=["POST"])
-def set_role():
-    """Set a player's role (Outfield / GoalKeeper) from ``from_frame`` onward.
+@app.route("/api/propagate", methods=["POST"])
+def propagate_attr():
+    """Apply attribute edits to a box from ``from_frame`` through the last frame.
 
-    Used when the human marks a player box as the goalkeeper: the role should
-    persist through the rest of the frames, not just the current one. Frames
-    before ``from_frame`` are left untouched.
+    Persistent box attributes carry forward once edited, rather than being
+    re-entered on every frame:
+      * player: ``team``, ``role``, ``track_id`` (rename) -- matched by the
+        ``track_id`` given in the request ("that player, from here on").
+      * ball: ``state`` -- applied to every subsequent frame that has a ball.
+
+    Bounding-box geometry and instantaneous events (ball ``kick``) are per-frame
+    and are intentionally NOT propagated. Frames before ``from_frame`` are left
+    untouched.
     """
     body = request.get_json(silent=True) or {}
-    tid = body.get("track_id")
-    role = body.get("role")
+    target = body.get("target")
     frm = body.get("from_frame")
-    if not isinstance(tid, str) or not tid:
-        return jsonify({"error": "track_id must be a non-empty string"}), 400
-    if role not in ROLE_ENUM:
-        return jsonify({"error": f"role must be one of {sorted(ROLE_ENUM)}"}), 400
+    attrs = body.get("attrs")
+    if target not in ("player", "ball"):
+        return jsonify({"error": "target must be 'player' or 'ball'"}), 400
     if not isinstance(frm, int) or not (0 <= frm < _frame_count()):
         return jsonify({"error": "from_frame out of range"}), 400
+    if not isinstance(attrs, dict) or not attrs:
+        return jsonify({"error": "attrs must be a non-empty object"}), 400
+    if "team" in attrs and attrs["team"] not in TEAM_ENUM:
+        return jsonify({"error": f"team must be one of {sorted(TEAM_ENUM)}"}), 400
+    if "role" in attrs and attrs["role"] not in ROLE_ENUM:
+        return jsonify({"error": f"role must be one of {sorted(ROLE_ENUM)}"}), 400
+    if "state" in attrs and attrs["state"] not in BALL_STATE_ENUM:
+        return jsonify({"error": f"state must be one of {sorted(BALL_STATE_ENUM)}"}), 400
+    if "track_id" in attrs and (not isinstance(attrs["track_id"], str) or not attrs["track_id"].strip()):
+        return jsonify({"error": "track_id must be a non-empty string"}), 400
+
+    match = body.get("track_id")
+    if target == "player" and (not isinstance(match, str) or not match):
+        return jsonify({"error": "track_id (match) must be a non-empty string"}), 400
 
     with _lock:
         changed = 0
-        for i in range(frm, _frame_count()):
-            for p in _annotations["frames"][i]["players"]:
-                if p.get("track_id") == tid:
-                    p["role"] = role
+        if target == "player":
+            player_attrs = ("team", "role", "track_id")
+            for i in range(frm, _frame_count()):
+                for p in _annotations["frames"][i]["players"]:
+                    if p.get("track_id") == match:
+                        for k in player_attrs:
+                            if k in attrs:
+                                p[k] = attrs[k]
+                        changed += 1
+        else:  # ball
+            for i in range(frm, _frame_count()):
+                b = _annotations["frames"][i].get("ball")
+                if b is not None and "state" in attrs:
+                    b["state"] = attrs["state"]
                     changed += 1
         _persist_locked()
     return jsonify({"ok": True, "changed": changed})
