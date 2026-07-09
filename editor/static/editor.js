@@ -960,10 +960,39 @@ function setSelection(sel) {
 }
 
 function syncBoxList() {
-  el.boxList.innerHTML = "";
   const filter = state.boxFilter;
-  const addItem = (label, color, sel) => {
+  const matches = [];   // {label, color, sel} -- gathered before rendering so a
+                         // single match can be auto-selected first (affects the
+                         // "selected" highlight rendered below).
+  const consider = (label, color, sel) => {
     if (filter && !label.toLowerCase().includes(filter)) return;
+    matches.push({ label, color, sel });
+  };
+  state.frame.players.forEach((p, i) => {
+    const gk = p.role === "GoalKeeper" ? " · GK" : "";
+    consider(`#${p.track_id} · ${p.team}${gk}`, COLORS[p.team] || COLORS.Defence, { type: "player", index: i });
+  });
+  if (state.frame.ball) consider("Ball", COLORS.ball, { type: "ball" });
+  // Exclusion areas listed after boxes; index is into state.exclusionAreas.
+  state.exclusionAreas.forEach((a, i) => {
+    consider("Exclusion area", COLORS.exclusion, { type: "area", index: i });
+  });
+
+  // A search that narrows down to exactly one box auto-selects it, so the
+  // human doesn't need an extra click. setSelection() is not reused here to
+  // avoid re-entering syncBoxList(); assign directly and sync the form.
+  if (filter && matches.length === 1) {
+    const only = matches[0].sel;
+    const alreadySelected = state.selected && state.selected.type === only.type &&
+      (only.type === "ball" || state.selected.index === only.index);
+    if (!alreadySelected) {
+      state.selected = only;
+      syncForm();
+    }
+  }
+
+  el.boxList.innerHTML = "";
+  for (const { label, color, sel } of matches) {
     const li = document.createElement("li");
     const sw = document.createElement("span");
     sw.className = "swatch"; sw.style.background = color;
@@ -975,16 +1004,7 @@ function syncBoxList() {
     if (isSel) li.classList.add("selected");
     li.onclick = () => { setSelection(sel); renderAll(); };
     el.boxList.appendChild(li);
-  };
-  state.frame.players.forEach((p, i) => {
-    const gk = p.role === "GoalKeeper" ? " · GK" : "";
-    addItem(`#${p.track_id} · ${p.team}${gk}`, COLORS[p.team] || COLORS.Defence, { type: "player", index: i });
-  });
-  if (state.frame.ball) addItem("Ball", COLORS.ball, { type: "ball" });
-  // Exclusion areas listed after boxes; index is into state.exclusionAreas.
-  state.exclusionAreas.forEach((a, i) => {
-    addItem("Exclusion area", COLORS.exclusion, { type: "area", index: i });
-  });
+  }
   updateCoreStatus();
 }
 
@@ -1439,6 +1459,7 @@ async function init() {
   el.boxSearchInput.oninput = () => {
     state.boxFilter = el.boxSearchInput.value.trim().toLowerCase();
     syncBoxList();
+    renderAll();   // reflect a possible auto-selection on the canvas
   };
   el.invertBtn.onclick = invertTeams;
   el.areaBtn.onclick = toggleAreaMode;
