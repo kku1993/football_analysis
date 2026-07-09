@@ -185,6 +185,12 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     cam = _camera_movement(video_path, n)
 
     # --- Players: per-track top-left-origin metric position, then interpolate.
+    # Uses the raw (unfiltered) transform so a player standing outside the
+    # calibration polygon still gets metric coordinates: the homography encodes
+    # the camera angle fitted from the calibration region, and extrapolating it
+    # projects off-region boxes onto the same pitch plane. (Same treatment as the
+    # ball below.) Extrapolation degrades with distance from the calibrated
+    # trapezoid, but it is preferable to silently dropping the player.
     player_pos = {}     # tid -> [ (x,y)|None ] * n
     player_team = {}    # tid -> "Offence"|"Defence"
     player_role = {}    # tid -> "GoalKeeper" if marked GK in ANY frame, else "Outfield"
@@ -198,11 +204,9 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
                 player_role.setdefault(tid, "Outfield")
             seq = player_pos.setdefault(tid, [None] * n)
             x1, y1, x2, y2 = p["bbox"]
-            foot = np.array([(x1 + x2) / 2.0 - cam[f][0], y2 - cam[f][1]], dtype=np.float32)
-            t = vt.transform_point(foot)   # polygon-filtered: off-pitch -> None
-            if t is not None:
-                x, y = np.array(t).squeeze().tolist()
-                seq[f] = (float(x), float(y))
+            foot = [(x1 + x2) / 2.0 - cam[f][0], y2 - cam[f][1]]
+            raw = _raw_transform(vt, foot)   # unfiltered: extrapolate off-region via homography
+            seq[f] = (float(raw[0]), float(raw[1]))
     for tid in player_pos:
         player_pos[tid] = _interpolate_gaps(player_pos[tid])
 
