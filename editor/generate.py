@@ -51,6 +51,7 @@ def _seed_frame_annotation(players_track, ball_track):
         players.append({
             "track_id": str(tid),
             "team": team,
+            "role": "Outfield",
             "bbox": [float(v) for v in info["bbox"]],
         })
 

@@ -108,6 +108,7 @@ main {
 .field > label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #374151; }
 .radio-row { display: flex; gap: 14px; flex-wrap: wrap; }
 .radio-row label { font-weight: 400; font-size: 14px; display: flex; align-items: center; gap: 4px; }
+.field label.check { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; font-size: 14px; cursor: pointer; }
 #trackIdInput, #kickPlayerId, #ballState { width: 100%; }
 #kickPlayerId { margin-top: 8px; }
 

@@ -25,6 +25,7 @@ from editor.generate import ANNOTATIONS_PATH, FRAMES_DIR, FRAME_PAD
 FRAMES_ABS = os.path.abspath(FRAMES_DIR)
 
 TEAM_ENUM = {"Offence", "Defence"}
+ROLE_ENUM = {"Outfield", "GoalKeeper"}
 BALL_STATE_ENUM = {"Active", "Goal", "OutOfBounds"}
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -93,6 +94,8 @@ def _validate_frame_annotation(obj):
             return "player.track_id must be a non-empty string"
         if p.get("team") not in TEAM_ENUM:
             return f"player.team must be one of {sorted(TEAM_ENUM)}"
+        if p.get("role", "Outfield") not in ROLE_ENUM:
+            return f"player.role must be one of {sorted(ROLE_ENUM)}"
         err = _validate_bbox(p.get("bbox"))
         if err:
             return f"player {tid}: {err}"
@@ -184,6 +187,7 @@ def put_frame(i):
             {
                 "track_id": p["track_id"],
                 "team": p["team"],
+                "role": p.get("role", "Outfield"),
                 "bbox": [float(v) for v in p["bbox"]],
             }
             for p in obj["players"]
@@ -229,6 +233,56 @@ def delete_player():
             _annotations["frames"][i]["players"] = kept
         _persist_locked()
     return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/invert_teams", methods=["POST"])
+def invert_teams():
+    """Swap Offence <-> Defence for every player in every frame.
+
+    Global toggle used when the human decides the two teams were assigned the
+    wrong way round. Self-inverse: calling it again restores the original.
+    """
+    swap = {"Offence": "Defence", "Defence": "Offence"}
+    with _lock:
+        changed = 0
+        for fr in _annotations["frames"]:
+            for p in fr["players"]:
+                new = swap.get(p.get("team"))
+                if new is not None:
+                    p["team"] = new
+                    changed += 1
+        _persist_locked()
+    return jsonify({"ok": True, "changed": changed})
+
+
+@app.route("/api/set_role", methods=["POST"])
+def set_role():
+    """Set a player's role (Outfield / GoalKeeper) from ``from_frame`` onward.
+
+    Used when the human marks a player box as the goalkeeper: the role should
+    persist through the rest of the frames, not just the current one. Frames
+    before ``from_frame`` are left untouched.
+    """
+    body = request.get_json(silent=True) or {}
+    tid = body.get("track_id")
+    role = body.get("role")
+    frm = body.get("from_frame")
+    if not isinstance(tid, str) or not tid:
+        return jsonify({"error": "track_id must be a non-empty string"}), 400
+    if role not in ROLE_ENUM:
+        return jsonify({"error": f"role must be one of {sorted(ROLE_ENUM)}"}), 400
+    if not isinstance(frm, int) or not (0 <= frm < _frame_count()):
+        return jsonify({"error": "from_frame out of range"}), 400
+
+    with _lock:
+        changed = 0
+        for i in range(frm, _frame_count()):
+            for p in _annotations["frames"][i]["players"]:
+                if p.get("track_id") == tid:
+                    p["role"] = role
+                    changed += 1
+        _persist_locked()
+    return jsonify({"ok": True, "changed": changed})
 
 
 def main():

@@ -17,6 +17,9 @@
       <label for="jumpInput">Jump to</label>
       <input id="jumpInput" type="number" min="0" step="1" value="0">
     </div>
+    <div class="actions">
+      <button id="invertBtn" title="Swap Offence/Defence for every player in every frame">⇄ Invert teams</button>
+    </div>
     <div class="status">
       <span id="videoName"></span>
       <span id="saveStatus" class="saved">saved</span>
@@ -73,6 +76,10 @@
                 <label><input type="radio" name="team" value="Offence"> Offence</label>
                 <label><input type="radio" name="team" value="Defence"> Defence</label>
               </div>
+            </div>
+            <div class="field">
+              <label class="check"><input type="checkbox" id="gkCheck"> Goalkeeper</label>
+              <div class="warn" style="color:#6b7280">Applies from this frame onward.</div>
             </div>
           </div>
 

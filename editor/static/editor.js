@@ -123,8 +123,9 @@ function renderFrameTo(canvas, idx, annotation, opts = {}) {
       const p = annotation.players[i];
       const sel = opts.selectable && state.selected &&
                   state.selected.type === "player" && state.selected.index === i;
+      const label = p.role === "GoalKeeper" ? `${p.track_id} GK` : p.track_id;
       drawBoxOn(ctx, scale, p.bbox, COLORS[p.team] || COLORS.Defence,
-                { label: p.track_id, selected: sel });
+                { label, selected: sel });
     }
     if (annotation.ball) {
       const sel = opts.selectable && state.selected && state.selected.type === "ball";
@@ -317,8 +318,10 @@ function syncBoxList() {
     li.onclick = () => { setSelection(sel); renderAll(); };
     el.boxList.appendChild(li);
   };
-  state.frame.players.forEach((p, i) =>
-    addItem(`#${p.track_id} · ${p.team}`, COLORS[p.team] || COLORS.Defence, { type: "player", index: i }));
+  state.frame.players.forEach((p, i) => {
+    const gk = p.role === "GoalKeeper" ? " · GK" : "";
+    addItem(`#${p.track_id} · ${p.team}${gk}`, COLORS[p.team] || COLORS.Defence, { type: "player", index: i });
+  });
   if (state.frame.ball) addItem("Ball", COLORS.ball, { type: "ball" });
 }
 
@@ -361,6 +364,7 @@ function syncForm() {
     const p = state.frame.players[sel.index];
     el.trackIdInput.value = p.track_id;
     el.metaForm.team.value = p.team;
+    el.gkCheck.checked = (p.role === "GoalKeeper");
     checkDuplicateId();
   }
 }
@@ -427,6 +431,47 @@ function onFormInput() {
   markDirty();
 }
 
+// Marking a player box as goalkeeper sets its role on this frame AND persists
+// that role through every subsequent frame (by track_id).
+async function onRoleToggle() {
+  const sel = state.selected;
+  if (!sel || sel.type !== "player") return;
+  const p = state.frame.players[sel.index];
+  const role = el.gkCheck.checked ? "GoalKeeper" : "Outfield";
+  p.role = role;
+  renderAll();
+  markDirty();
+
+  if (state.idx + 1 < state.meta.frame_count) {
+    await flushSave();                                 // persist this frame first
+    await setRoleFrom(p.track_id, role, state.idx + 1);  // apply to later frames
+    state.nextFrame = await fetchFrame(state.idx + 1);   // refresh next-frame preview
+    renderAll();
+  }
+}
+
+async function setRoleFrom(tid, role, fromFrame) {
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/set_role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track_id: tid, role, from_frame: fromFrame }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Role update failed: ${msg}`;
+      return;
+    }
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Role update failed: ${e}`;
+  }
+}
+
 async function deleteSelected() {
   const sel = state.selected;
   if (!sel) return;
@@ -478,6 +523,29 @@ async function deletePlayerFrom(tid, fromFrame) {
   }
 }
 
+async function invertTeams() {
+  el.invertBtn.disabled = true;
+  setSaveStatus("saving");
+  try {
+    await flushSave();                       // persist current frame before the global swap
+    const r = await fetch("/api/invert_teams", { method: "POST" });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Invert failed: ${msg}`;
+      return;
+    }
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+    await loadFrame(state.idx);              // reload current + neighbors with swapped teams
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Invert failed: ${e}`;
+  } finally {
+    el.invertBtn.disabled = false;
+  }
+}
+
 // ---- persistence ----------------------------------------------------------
 function setSaveStatus(s) {
   el.saveStatus.textContent = s;
@@ -502,7 +570,7 @@ function currentPayload() {
   }
   return {
     players: state.frame.players.map((p) => ({
-      track_id: p.track_id, team: p.team, bbox: p.bbox.map(Number),
+      track_id: p.track_id, team: p.team, role: p.role || "Outfield", bbox: p.bbox.map(Number),
     })),
     ball,
   };
@@ -605,7 +673,7 @@ async function init() {
   const ids = ["prevBtn", "nextBtn", "frameLabel", "jumpInput", "videoName", "saveStatus",
     "prevCanvas", "nextCanvas", "mainCanvas", "canvasWrap", "boxList", "metaForm", "noSelection",
     "playerFields", "ballFields", "trackIdInput", "ballState", "kickPlayerId",
-    "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn"];
+    "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn", "invertBtn", "gkCheck"];
   for (const id of ids) el[id] = document.getElementById(id);
 
   state.meta = await (await fetch("/api/meta")).json();
@@ -620,14 +688,17 @@ async function init() {
   el.prevBtn.onclick = () => loadFrame(state.idx - 1);
   el.nextBtn.onclick = () => loadFrame(state.idx + 1);
   el.jumpInput.onchange = () => loadFrame(parseInt(el.jumpInput.value, 10) || 0);
+  el.invertBtn.onclick = invertTeams;
 
   el.metaForm.addEventListener("input", (e) => {
     if (e.target.name === "boxType") onBoxTypeChange();
+    else if (e.target.id === "gkCheck") { /* handled by the change listener below */ }
     else onFormInput();
   });
   el.metaForm.addEventListener("change", (e) => {
     if (e.target.name === "boxType") onBoxTypeChange();
   });
+  el.gkCheck.addEventListener("change", onRoleToggle);
   el.deleteBtn.onclick = deleteSelected;
 
   // flush a pending save if the user closes/reloads the tab

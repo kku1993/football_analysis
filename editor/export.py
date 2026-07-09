@@ -20,9 +20,10 @@ fully video-agnostic, but this export step inherits the pipeline's per-video
 calibration and must be recalibrated per camera setup, exactly as ``main.py``
 already requires. We do not attempt auto-calibration.
 
-Role limitation: goalkeepers were merged into "players" by the tracker with no
-preserved flag, so ``GoalKeeper`` cannot be inferred here; every player is
-exported with ``role: "Outfield"``.
+Roles: the tracker merges goalkeepers into "players" with no preserved flag, so
+``GoalKeeper`` cannot be auto-inferred; instead the human marks the goalkeeper on
+a player box in the editor. A player exported as ``GoalKeeper`` if they are marked
+GK on any frame; otherwise ``Outfield``.
 """
 
 import argparse
@@ -162,10 +163,15 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     # --- Players: per-track top-left-origin metric position, then interpolate.
     player_pos = {}     # tid -> [ (x,y)|None ] * n
     player_team = {}    # tid -> "Offence"|"Defence"
+    player_role = {}    # tid -> "GoalKeeper" if marked GK in ANY frame, else "Outfield"
     for f, fr in enumerate(frames):
         for p in fr["players"]:
             tid = p["track_id"]
             player_team.setdefault(tid, p["team"])
+            if p.get("role") == "GoalKeeper":
+                player_role[tid] = "GoalKeeper"
+            else:
+                player_role.setdefault(tid, "Outfield")
             seq = player_pos.setdefault(tid, [None] * n)
             x1, y1, x2, y2 = p["bbox"]
             foot = np.array([(x1 + x2) / 2.0 - cam[f][0], y2 - cam[f][1]], dtype=np.float32)
@@ -203,7 +209,8 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
 
     # --- Top-level players: unique ids that appear on the pitch at least once.
     appearing = [tid for tid, seq in player_pos.items() if any(p is not None for p in seq)]
-    players_list = [{"id": tid, "role": "Outfield"} for tid in sorted(appearing, key=_id_sort_key)]
+    players_list = [{"id": tid, "role": player_role.get(tid, "Outfield")}
+                    for tid in sorted(appearing, key=_id_sort_key)]
 
     # --- Per-frame output.
     frames_out = []
