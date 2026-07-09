@@ -260,7 +260,7 @@ async function onMouseUp(ev) {
     const dragPx = Math.max(Math.abs(imgToCan(b[2] - b[0])), Math.abs(imgToCan(b[3] - b[1])));
     state.mode = "idle";
     if (dragPx >= MIN_DRAG) {
-      await createPlayerBox(normalizeBox(b));
+      await createBox(normalizeBox(b));
     } else {
       // treated as a click on empty space -> deselect
       setSelection(null);
@@ -283,7 +283,17 @@ async function onMouseUp(ev) {
   state.drag = null;
 }
 
-async function createPlayerBox(bbox) {
+async function createBox(bbox) {
+  // Default new boxes to "ball"; only one ball allowed per frame, so fall
+  // back to creating a player once a ball already exists.
+  if (!state.frame.ball) {
+    state.frame.ball = { bbox, state: "Active", kick: null };
+    setSelection({ type: "ball" });
+    renderAll();
+    markDirty();
+    return;
+  }
+
   let newId = "1";
   try {
     const r = await fetch("/api/next_track_id");
