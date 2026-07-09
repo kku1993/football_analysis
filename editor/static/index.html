@@ -56,6 +56,7 @@
       <section id="calibSection" class="hidden">
         <h2>Pitch calibration</h2>
         <p class="muted">Mark &ge;4 pixel &rarr; pitch correspondences. Camera movement is referenced to <strong>frame 0</strong>, so points must be marked there &mdash; switch to frame 0 before placing them. Pitch coords are corner-origin meters (x: 0&hellip;length from the left goal line; y: 0&hellip;width from the top touchline). The exporter centers the origin afterward.</p>
+        <p class="warn">Mapping points must span <strong>both</strong> pitch axes: use at least two distinct <em>x</em> values <strong>and</strong> at least two distinct <em>y</em> values. Piling all points on one goal-line (e.g. all <em>x</em>=0) leaves the pitch-length direction unobservable &mdash; every box then collapses to that line. Pick landmarks from across the visible pitch (corners, penalty spot, halfway line, &hellip;).</p>
         <div class="field">
           <label>Pitch length (m)</label>
           <input id="calibLen" type="number" step="0.01" min="1" autocomplete="off">
