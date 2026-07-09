@@ -488,6 +488,37 @@ def next_track_id():
     return jsonify({"next_id": str(mx + 1)})
 
 
+@app.route("/api/track_team")
+def track_team():
+    """Team (and role) a track_id was most recently assigned, near ``frame``.
+
+    Used when a human creates or renames a player box to an id that may
+    already exist elsewhere: the id's established team is looked up so it can
+    be adopted automatically instead of defaulting/staying wrong. Searches
+    backward from ``frame`` first (most recent prior appearance), then
+    forward, since a box is usually being re-attached to a track that
+    disappeared earlier in the video. Returns ``{"team": null}`` if the id has
+    no history anywhere.
+    """
+    tid = request.args.get("track_id")
+    frame_idx = request.args.get("frame", type=int)
+    if not tid or frame_idx is None or not (0 <= frame_idx < _frame_count()):
+        return jsonify({"error": "track_id and frame (in range) are required"}), 400
+    with _lock:
+        frames = _annotations["frames"]
+        n = len(frames)
+        search_order = list(range(frame_idx - 1, -1, -1)) + list(range(frame_idx + 1, n))
+        for i in search_order:
+            for p in frames[i]["players"]:
+                if p.get("track_id") == tid:
+                    return jsonify({
+                        "team": p.get("team"),
+                        "role": p.get("role", "Outfield"),
+                        "frame": i,
+                    })
+    return jsonify({"team": None})
+
+
 @app.route("/frames/<int:i>")
 def frame_image(i):
     if not (0 <= i < _frame_count()):

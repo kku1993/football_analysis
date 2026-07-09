@@ -1142,9 +1142,31 @@ async function onFormChange(e) {
       if (!newId || newId === oldId) { el.trackIdInput.value = oldId; return; }
       p.track_id = newId;
       state.selectedTrackId = newId;
+
+      // The new id may already have an established team/role elsewhere in the
+      // video (the human is usually re-attaching a box to a track that
+      // disappeared, or fixing a swapped id) -- adopt both automatically
+      // rather than leaving whatever the box previously had.
+      const attrs = { track_id: newId };
+      const known = await fetchTrackHistory(newId, state.idx);
+      if (known && known.team) {
+        if (known.team !== p.team) {
+          p.team = known.team;
+          el.metaForm.team.value = p.team;
+          attrs.team = p.team;
+        }
+        const knownRole = known.role || "Outfield";
+        if (knownRole !== (p.role || "Outfield")) {
+          p.role = knownRole;
+          el.gkCheck.checked = knownRole === "GoalKeeper";
+          attrs.role = knownRole;
+        }
+      }
+
       renderAll();
-      // match the OLD id in later frames and rename it to the new id
-      await applyPlayerAttrForward(oldId, { track_id: newId });
+      // match the OLD id in later frames and rename it to the new id (and
+      // its team, if adopted above)
+      await applyPlayerAttrForward(oldId, attrs);
     }
   } else if (state.frame.ball) {
     const b = state.frame.ball;
@@ -1386,6 +1408,20 @@ async function loadFrame(idx) {
 async function fetchFrame(idx) {
   const r = await fetch(`/api/frame/${idx}`);
   return await r.json();
+}
+
+// Looks up a track_id's team + role (GoalKeeper/Outfield) from the nearest
+// frame (searching outward from idx) that already has it, so a newly-created
+// or renamed box can adopt the id's established affiliation instead of
+// defaulting/staying wrong.
+async function fetchTrackHistory(trackId, idx) {
+  try {
+    const r = await fetch(`/api/track_team?track_id=${encodeURIComponent(trackId)}&frame=${idx}`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---- keyboard -------------------------------------------------------------
