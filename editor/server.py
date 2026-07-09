@@ -204,6 +204,33 @@ def put_frame(i):
     return jsonify({"ok": True})
 
 
+@app.route("/api/delete_player", methods=["POST"])
+def delete_player():
+    """Remove a player (by track_id) from ``from_frame`` through the last frame.
+
+    Used when the human deletes a player box: the player should disappear from
+    that frame onward, not just the current one. Frames before ``from_frame`` are
+    left untouched. Idempotent; safe if the id is not present.
+    """
+    body = request.get_json(silent=True) or {}
+    tid = body.get("track_id")
+    frm = body.get("from_frame")
+    if not isinstance(tid, str) or not tid:
+        return jsonify({"error": "track_id must be a non-empty string"}), 400
+    if not isinstance(frm, int) or not (0 <= frm < _frame_count()):
+        return jsonify({"error": "from_frame out of range"}), 400
+
+    with _lock:
+        removed = 0
+        for i in range(frm, _frame_count()):
+            players = _annotations["frames"][i]["players"]
+            kept = [p for p in players if p.get("track_id") != tid]
+            removed += len(players) - len(kept)
+            _annotations["frames"][i]["players"] = kept
+        _persist_locked()
+    return jsonify({"ok": True, "removed": removed})
+
+
 def main():
     _load_annotations()
     print(f"Loaded {_frame_count()} frames from {ANNOTATIONS_PATH}.")

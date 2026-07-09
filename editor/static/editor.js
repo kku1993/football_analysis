@@ -427,14 +427,55 @@ function onFormInput() {
   markDirty();
 }
 
-function deleteSelected() {
+async function deleteSelected() {
   const sel = state.selected;
   if (!sel) return;
-  if (sel.type === "ball") state.frame.ball = null;
-  else state.frame.players.splice(sel.index, 1);
+
+  if (sel.type === "ball") {
+    state.frame.ball = null;
+    setSelection(null);
+    renderAll();
+    markDirty();
+    return;
+  }
+
+  // Deleting a player box removes this box from the current frame AND purges
+  // that player (by track_id) from every subsequent frame.
+  const tid = state.frame.players[sel.index].track_id;
+  state.frame.players.splice(sel.index, 1);
   setSelection(null);
   renderAll();
   markDirty();
+
+  if (state.idx + 1 < state.meta.frame_count) {
+    await flushSave();                         // persist this frame first
+    await deletePlayerFrom(tid, state.idx + 1);  // purge from later frames
+    // the next-frame preview may have changed; refresh it
+    state.nextFrame = await fetchFrame(state.idx + 1);
+    renderAll();
+  }
+}
+
+async function deletePlayerFrom(tid, fromFrame) {
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/delete_player", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track_id: tid, from_frame: fromFrame }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Delete failed: ${msg}`;
+      return;
+    }
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Delete failed: ${e}`;
+  }
 }
 
 // ---- persistence ----------------------------------------------------------
