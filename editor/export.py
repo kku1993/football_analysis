@@ -206,6 +206,48 @@ def _ball_height_for_frame(trajectories, f):
     return 0.0
 
 
+def _ball_linear_xy_for_frame(trajectories, f, ball_pos, player_pos, offset, ball_kick):
+    """Centered (x, y) ground position of the ball at frame ``f`` when airborne.
+
+    While the ball is in the air its pixel projection onto the pitch plane is
+    unreliable -- the homography assumes points lie on the ground, and an
+    airborne ball is metres above it, so the per-frame pixel centroid wanders.
+    For frames inside a trajectory we therefore replace the projected (x, y)
+    with a straight ground line from where the ball left the kicker (the ball's
+    position at the trajectory start, i.e. at the kicker's feet) to where it
+    reaches the receiver at the trajectory end. The receiver is identified by
+    ``kick.toPlayerId`` on the end frame's ball (the existing kick marker); the
+    receiver's player position at the end frame is the line's far endpoint.
+    When no receiver is annotated, the ball's own projected position at the end
+    frame is used as the far endpoint (a start->end ground line, still cleaner
+    than the jittery per-frame airborne projection).
+
+    Returns centered (x, y), or None when ``f`` is outside every trajectory or
+    when the start/end ball positions are unavailable.
+    """
+    for t in trajectories:
+        s, e = t["start_frame"], t["end_frame"]
+        if not (s <= f <= e):
+            continue
+        if s >= len(ball_pos) or e >= len(ball_pos) or ball_pos[s] is None or ball_pos[e] is None:
+            return None
+        start_xy = _to_center_coords(ball_pos[s], offset)
+        end_xy = _to_center_coords(ball_pos[e], offset)
+        k = ball_kick[e] if e < len(ball_kick) else None
+        if isinstance(k, dict):
+            to_id = k.get("toPlayerId")
+            if to_id:
+                seq = player_pos.get(to_id)
+                if seq is not None and e < len(seq) and seq[e] is not None:
+                    end_xy = _to_center_coords(seq[e], offset)
+        if e == s:
+            return start_xy
+        u = (f - s) / float(e - s)
+        return (start_xy[0] + u * (end_xy[0] - start_xy[0]),
+                start_xy[1] + u * (end_xy[1] - start_xy[1]))
+    return None
+
+
 # --- camera movement -------------------------------------------------------
 def _first_video_frame(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -355,6 +397,14 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
             bx, by = 0.0, 0.0
             state = "OutOfBounds"
         bz = _ball_height_for_frame(ball_trajectories, f) if bp is not None else 0.0
+        # While the ball is airborne (inside a trajectory) replace the noisy
+        # airborne pixel projection with a straight ground line from the
+        # kicker to the receiver (see _ball_linear_xy_for_frame).
+        lin = (_ball_linear_xy_for_frame(ball_trajectories, f, ball_pos,
+                                         player_pos, offset, ball_kick)
+               if bp is not None else None)
+        if lin is not None:
+            bx, by = lin
         ball_obj = {"x": bx, "y": by, "z": bz, "state": state}
         kick = ball_kick[f]
         if isinstance(kick, dict) and (kick.get("byPlayerId") or kick.get("toPlayerId")):
