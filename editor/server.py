@@ -2,27 +2,29 @@
 
 Run as::
 
-    venv/bin/python -m editor.server
+    venv/bin/python -m editor.server [data_dir] [--port N]
 
-Serves on http://127.0.0.1:5000. Loads ``editor_data/annotations.json`` into
-memory at startup (produced by ``editor.generate``). The frontend owns all
-editing logic; this backend just serves frames + annotations and validates and
-persists per-frame edits. Per-frame PUTs are the autosave mechanism -- there is
-no separate "save" concept. Single user, single process: a module-level dict
-guarded by a lock is sufficient.
+``data_dir`` is a directory produced by ``editor.generate`` (e.g.
+``editor_data-my-video/``), containing ``frames/`` and ``annotations.json``.
+It defaults to ``$EDITOR_DATA_DIR`` or ``./editor_data``. Point separate server
+instances -- each with its own ``data_dir`` and ``--port`` -- at separate
+directories to edit multiple videos side by side without conflict.
+
+Loads ``<data_dir>/annotations.json`` into memory at startup. The frontend
+owns all editing logic; this backend just serves frames + annotations and
+validates and persists per-frame edits. Per-frame PUTs are the autosave
+mechanism -- there is no separate "save" concept. Single video, single
+process: a module-level dict guarded by a lock is sufficient.
 """
 
+import argparse
 import json
 import os
 import threading
 
 from flask import Flask, jsonify, request, send_from_directory, abort
 
-from editor.generate import ANNOTATIONS_PATH, FRAMES_DIR, FRAME_PAD, default_calibration
-
-# Flask's send_from_directory resolves relative dirs against the package root, so
-# anchor to absolute paths derived from the current working directory instead.
-FRAMES_ABS = os.path.abspath(FRAMES_DIR)
+from editor.generate import FRAME_PAD, default_calibration
 
 TEAM_ENUM = {"Offence", "Defence"}
 ROLE_ENUM = {"Outfield", "GoalKeeper"}
@@ -33,12 +35,33 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 _lock = threading.Lock()
 _annotations = None  # loaded at startup
 
+DATA_DIR = ANNOTATIONS_PATH = FRAMES_DIR = FRAMES_ABS = None
+
+
+def _set_data_dir(data_dir):
+    """(Re)point the server at ``data_dir``. Must be called before
+    ``_load_annotations()``; separate so the CLI (``main()``) can override the
+    env-var-based default resolved below before actually loading.
+    """
+    global DATA_DIR, ANNOTATIONS_PATH, FRAMES_DIR, FRAMES_ABS
+    DATA_DIR = data_dir
+    ANNOTATIONS_PATH = os.path.join(DATA_DIR, "annotations.json")
+    FRAMES_DIR = os.path.join(DATA_DIR, "frames")
+    # Flask's send_from_directory resolves relative dirs against the package root, so
+    # anchor to absolute paths derived from the current working directory instead.
+    FRAMES_ABS = os.path.abspath(FRAMES_DIR)
+
+
+_set_data_dir(os.environ.get("EDITOR_DATA_DIR", "editor_data"))
+
 
 def _load_annotations():
     global _annotations
     if not os.path.exists(ANNOTATIONS_PATH):
         raise SystemExit(
-            f"{ANNOTATIONS_PATH} not found. Run `venv/bin/python -m editor.generate` first.")
+            f"{ANNOTATIONS_PATH} not found. Run `venv/bin/python -m editor.generate "
+            f"--video <path>` first, then point the server at its output directory, "
+            f"e.g. `venv/bin/python -m editor.server {DATA_DIR}`.")
     with open(ANNOTATIONS_PATH) as fh:
         _annotations = json.load(fh)
     # Exclusion areas are a global (per-video) edit, not per-frame; backfill the
@@ -751,14 +774,29 @@ def delete_exclusion_area(aid):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Serve the tracking editor for one video's data.")
+    parser.add_argument("data_dir", nargs="?", default=None,
+                        help="Directory produced by `editor.generate` (e.g. "
+                             "editor_data-my-video/), containing frames/ and "
+                             "annotations.json. Defaults to $EDITOR_DATA_DIR or "
+                             "./editor_data.")
+    parser.add_argument("--port", type=int, default=5000,
+                        help="Use a different port per instance to run several "
+                             "videos' editors at once.")
+    args = parser.parse_args()
+    if args.data_dir:
+        _set_data_dir(args.data_dir)
     _load_annotations()
     print(f"Loaded {_frame_count()} frames from {ANNOTATIONS_PATH}.")
-    print("Serving editor on http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    print(f"Serving editor on http://127.0.0.1:{args.port}")
+    app.run(host="127.0.0.1", port=args.port, debug=False)
 
 
-# Load annotations on import too, so `flask run` / test harnesses work.
-_load_annotations()
+# Load annotations on import too, so `flask run` / test harnesses work -- they
+# never call main(), so the CLI data_dir arg above isn't available there; use
+# the EDITOR_DATA_DIR env var instead for a non-default directory in that case.
+if __name__ != "__main__":
+    _load_annotations()
 
 
 if __name__ == "__main__":

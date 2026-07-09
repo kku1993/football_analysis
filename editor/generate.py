@@ -2,12 +2,17 @@
 
 Run as::
 
-    venv/bin/python -m editor.generate [--video <path>] [--force]
+    venv/bin/python -m editor.generate [--video <path>] [--output-dir <dir>] [--force]
 
 ``--video`` defaults to the sample video referenced by ``main.py`` so the sample
 workflow needs no arguments. Nothing about the video (path, resolution, fps,
 frame count) is hardcoded downstream: it is measured here and recorded in
 ``annotations.json``, from which the server, frontend and exporter read it.
+
+Output goes to ``editor_data-<video filename>/`` by default (``--output-dir``
+overrides this), so multiple videos can be generated and edited side by side
+without one clobbering another's frames/annotations. Point ``editor.server``
+at the resulting directory to edit it.
 
 The frames written here are *clean* (no boxes baked in); the editor draws boxes
 as canvas overlays from ``annotations.json`` so they stay editable.
@@ -32,9 +37,21 @@ from view_transformer import (
 TEAM_NAME = {1: "Defence", 2: "Offence"}
 
 DEFAULT_VIDEO = "input_videos/arg-egy-14_57-goal.mp4"
+
+# Legacy flat default, still used as export.py's fallback --annotations path.
+# generate() itself defaults to a per-video directory (see default_data_dir).
 EDITOR_DATA_DIR = "editor_data"
 FRAMES_DIR = os.path.join(EDITOR_DATA_DIR, "frames")
 ANNOTATIONS_PATH = os.path.join(EDITOR_DATA_DIR, "annotations.json")
+
+
+def default_data_dir(video_path):
+    """The editor_data directory a video generates into, named after it so
+    several videos can be worked on side by side (each editor.server instance
+    points at one) without clobbering each other's frames/annotations.
+    """
+    stem = os.path.splitext(os.path.basename(video_path))[0]
+    return f"editor_data-{stem}"
 
 
 def default_calibration():
@@ -93,10 +110,14 @@ def _seed_frame_annotation(players_track, ball_track):
     return {"players": players, "ball": ball}
 
 
-def generate(video_path, force=False):
-    if os.path.exists(ANNOTATIONS_PATH) and not force:
+def generate(video_path, force=False, output_dir=None):
+    data_dir = output_dir or default_data_dir(video_path)
+    frames_dir = os.path.join(data_dir, "frames")
+    annotations_path = os.path.join(data_dir, "annotations.json")
+
+    if os.path.exists(annotations_path) and not force:
         raise SystemExit(
-            f"{ANNOTATIONS_PATH} already exists; refusing to overwrite human "
+            f"{annotations_path} already exists; refusing to overwrite human "
             f"edits. Pass --force to regenerate.")
 
     if not os.path.exists(video_path):
@@ -109,12 +130,12 @@ def generate(video_path, force=False):
     height, width = video_frames[0].shape[:2]
     fps = _video_fps(video_path)
 
-    os.makedirs(FRAMES_DIR, exist_ok=True)
+    os.makedirs(frames_dir, exist_ok=True)
 
-    print(f"Writing {frame_count} clean frames to {FRAMES_DIR}/ ...")
+    print(f"Writing {frame_count} clean frames to {frames_dir}/ ...")
     frames_out = []
     for i, frame in enumerate(video_frames):
-        fname = os.path.join(FRAMES_DIR, f"frame_{i:0{FRAME_PAD}d}.jpg")
+        fname = os.path.join(frames_dir, f"frame_{i:0{FRAME_PAD}d}.jpg")
         cv2.imwrite(fname, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         frames_out.append(_seed_frame_annotation(tracks["players"][i], tracks["ball"][i]))
 
@@ -128,21 +149,25 @@ def generate(video_path, force=False):
         "calibration": default_calibration(),
     }
 
-    tmp = ANNOTATIONS_PATH + ".tmp"
+    tmp = annotations_path + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(annotations, fh, indent=2)
-    os.replace(tmp, ANNOTATIONS_PATH)
+    os.replace(tmp, annotations_path)
 
-    print(f"Wrote {ANNOTATIONS_PATH} ({frame_count} frames, {width}x{height}, {fps:.2f} fps).")
+    print(f"Wrote {annotations_path} ({frame_count} frames, {width}x{height}, {fps:.2f} fps).")
+    print(f"Edit it with: venv/bin/python -m editor.server {data_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate editor frames + seed annotations.")
     parser.add_argument("--video", default=DEFAULT_VIDEO, help="Input video path.")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory to write frames/ and annotations.json into. "
+                             "Defaults to 'editor_data-<video filename>'.")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite an existing annotations.json.")
     args = parser.parse_args()
-    generate(args.video, force=args.force)
+    generate(args.video, force=args.force, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":
