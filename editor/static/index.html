@@ -21,6 +21,7 @@
       <button id="calibBtn" title="Toggle pitch-calibration mode (mark pixel -> pitch correspondences on frame 0)">⊕ Calibration</button>
       <button id="arcBtn" title="Toggle ball-trajectory mode (mark frames where the ball is in the air)">⤓ Ball arc</button>
       <button id="areaBtn" title="Toggle exclusion-area drawing mode">⬚ Exclusion area</button>
+      <button id="coreBtn" title="Toggle core-player panel (navigate to frames with missing/extra players)">☰ Core players</button>
       <button id="invertBtn" title="Swap Offence/Defence for every player in every frame">⇄ Invert teams</button>
     </div>
     <div class="status">
@@ -51,6 +52,7 @@
     <aside id="sidebar">
       <section id="boxListSection">
         <h2>Boxes in this frame</h2>
+        <input id="boxSearchInput" type="text" placeholder="Filter (id, team, ball...)" autocomplete="off">
         <ul id="boxList"></ul>
       </section>
 
@@ -114,6 +116,25 @@
         </div>
         <button type="button" id="arcAddBtn">Add trajectory</button>
         <p class="warn" id="arcWarn"></p>
+      </section>
+
+      <section id="coreSection" class="hidden">
+        <h2>Core players</h2>
+        <p class="muted">Track IDs that must appear in <strong>every</strong> frame. Use the navigation below to jump to the nearest frame where a required player is missing, or where a player not in this set shows up.</p>
+        <div class="field">
+          <label for="coreIdsInput">Core track IDs (comma or space separated)</label>
+          <textarea id="coreIdsInput" rows="3"></textarea>
+        </div>
+        <button type="button" id="coreSaveBtn">Save core ids</button>
+        <p class="warn" id="coreWarn"></p>
+        <div class="field">
+          <label>This frame</label>
+          <p id="coreStatus" class="muted">No core ids configured.</p>
+        </div>
+        <div class="nav-row">
+          <button type="button" id="corePrevBtn" title="Previous issue frame (Shift+←)">◀ Prev issue</button>
+          <button type="button" id="coreNextBtn" title="Next issue frame (Shift+→)">Next issue ▶</button>
+        </div>
       </section>
 
       <section id="formSection">

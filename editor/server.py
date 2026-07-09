@@ -51,6 +51,9 @@ def _load_annotations():
     # ball being in the air, with a max height; the exporter interpolates a
     # parabola for z within each range). Backfill on older files.
     _annotations.setdefault("ball_trajectories", [])
+    # Core player ids: track_ids expected in EVERY frame. Used to drive the
+    # missing/extra-player navigation below. Backfill on older files.
+    _annotations.setdefault("core_player_ids", [])
 
 
 def _persist_locked():
@@ -192,6 +195,7 @@ def meta():
         "exclusion_areas": _annotations.get("exclusion_areas", []),
         "calibration": _annotations.get("calibration"),
         "ball_trajectories": _annotations.get("ball_trajectories", []),
+        "core_player_ids": _annotations.get("core_player_ids", []),
     })
 
 
@@ -371,6 +375,99 @@ def delete_ball_trajectory(tid):
         _annotations["ball_trajectories"] = new_trajs
         _persist_locked()
     return jsonify({"ok": True})
+
+
+def _validate_core_player_ids(ids):
+    """Return an error string, or None if valid.
+
+    Shape: a list of unique, non-empty track_id strings that are expected to
+    appear in every frame. Membership against a frame's actual players (or
+    lack thereof) is what drives the missing/extra navigation below.
+    """
+    if not isinstance(ids, list):
+        return "core_player_ids must be a list"
+    seen = set()
+    for x in ids:
+        if not isinstance(x, str) or not x.strip():
+            return "each core player id must be a non-empty string"
+        if x in seen:
+            return f"duplicate core player id: {x}"
+        seen.add(x)
+    return None
+
+
+@app.route("/api/core_player_ids", methods=["GET"])
+def get_core_player_ids():
+    with _lock:
+        return jsonify(_annotations.get("core_player_ids", []))
+
+
+@app.route("/api/core_player_ids", methods=["PUT"])
+def put_core_player_ids():
+    body = request.get_json(silent=True) or {}
+    ids = body.get("ids")
+    err = _validate_core_player_ids(ids)
+    if err:
+        return jsonify({"error": err}), 400
+    with _lock:
+        _annotations["core_player_ids"] = list(ids)
+        _persist_locked()
+        saved = _annotations["core_player_ids"]
+    return jsonify({"ok": True, "core_player_ids": saved})
+
+
+def _frame_issue(frame, core_ids_set):
+    """Return (missing, extra) track_ids for ``frame`` against the core set.
+
+    ``missing`` = core ids absent from the frame; ``extra`` = track_ids present
+    in the frame that are not in the core set. Both sorted for determinism.
+    """
+    present = {p["track_id"] for p in frame.get("players", [])}
+    missing = sorted(core_ids_set - present)
+    extra = sorted(present - core_ids_set)
+    return missing, extra
+
+
+@app.route("/api/frame_issues/nearest", methods=["GET"])
+def frame_issues_nearest():
+    """Find the nearest frame (relative to ``from``) with a missing/extra
+    core player, searching outward in ``dir`` (next = increasing indices,
+    prev = decreasing). Returns ``{"frame": null}`` if none is found, or if no
+    core player ids are configured.
+    """
+    frm = request.args.get("from", type=int)
+    direction = request.args.get("dir")
+    if frm is None or direction not in ("next", "prev"):
+        return jsonify({"error": "from (int) and dir ('next'|'prev') are required"}), 400
+    with _lock:
+        core_ids = _annotations.get("core_player_ids", [])
+        if not core_ids:
+            return jsonify({"frame": None})
+        core_set = set(core_ids)
+        frames = _annotations["frames"]
+        n = len(frames)
+        rng = range(frm + 1, n) if direction == "next" else range(frm - 1, -1, -1)
+        for i in rng:
+            missing, extra = _frame_issue(frames[i], core_set)
+            if missing or extra:
+                return jsonify({"frame": i, "missing": missing, "extra": extra})
+    return jsonify({"frame": None})
+
+
+@app.route("/api/frame_issues/count", methods=["GET"])
+def frame_issues_count():
+    """Total number of frames with a missing/extra core player, for display."""
+    with _lock:
+        core_ids = _annotations.get("core_player_ids", [])
+        if not core_ids:
+            return jsonify({"count": 0})
+        core_set = set(core_ids)
+        count = 0
+        for fr in _annotations["frames"]:
+            missing, extra = _frame_issue(fr, core_set)
+            if missing or extra:
+                count += 1
+    return jsonify({"count": count})
 
 
 @app.route("/api/next_track_id")

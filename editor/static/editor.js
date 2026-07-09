@@ -49,6 +49,9 @@ const state = {
   calibDirty: false,
   ballTrajectories: [], // [{id, start_frame, end_frame, max_height}] -- global per-video
   arcMode: false,       // when true, the sidebar shows the ball-trajectory panel
+  coreIds: [],           // [track_id, ...] -- track_ids expected in every frame, global per-video
+  coreMode: false,        // when true, the sidebar shows the core-players panel
+  boxFilter: "",          // lowercased search text filtering "Boxes in this frame"
 };
 
 const el = {};       // cached DOM nodes
@@ -829,6 +832,111 @@ function ballHeightAt(idx) {
   return 0;
 }
 
+// ---- core players ----------------------------------------------------------
+// Global per-video list of track_ids expected in every frame. Missing/extra
+// status for the current frame is computed client-side (the frame is already
+// loaded); jumping to the nearest frame with an issue requires a server round
+// trip since only the current frame + 2 neighbors are loaded in the browser.
+function loadCoreIds() {
+  state.coreIds = (state.meta.core_player_ids || []).slice();
+}
+
+function toggleCoreMode() {
+  state.coreMode = !state.coreMode;
+  el.coreBtn.classList.toggle("active", state.coreMode);
+  el.coreSection.classList.toggle("hidden", !state.coreMode);
+  if (state.coreMode) syncCorePanel();
+  renderAll();
+}
+
+function syncCorePanel() {
+  el.coreIdsInput.value = state.coreIds.join(", ");
+  el.coreWarn.textContent = "";
+  updateCoreStatus();
+}
+
+function parseCoreIdsInput() {
+  return el.coreIdsInput.value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+async function saveCoreIds() {
+  const ids = parseCoreIdsInput();
+  const seen = new Set();
+  for (const id of ids) {
+    if (seen.has(id)) { el.coreWarn.textContent = `Duplicate id: ${id}`; return; }
+    seen.add(id);
+  }
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/core_player_ids", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error"); el.coreWarn.textContent = `Save failed: ${msg}`; return;
+    }
+    state.coreIds = ids;
+    setSaveStatus("saved"); el.coreWarn.textContent = "Saved.";
+    updateCoreStatus();
+  } catch (e) {
+    setSaveStatus("error"); el.coreWarn.textContent = `Save failed: ${e}`;
+  }
+}
+
+// Recomputes the "This frame" status line in the core-players panel from the
+// currently-loaded frame. Cheap, so called on every selection/box-list sync
+// rather than only while the panel is open.
+function updateCoreStatus() {
+  if (!el.coreStatus || !state.frame) return;
+  if (!state.coreIds.length) {
+    el.coreStatus.textContent = "No core ids configured.";
+    el.coreStatus.classList.remove("warn-text");
+    return;
+  }
+  const present = new Set(state.frame.players.map((p) => p.track_id));
+  const missing = state.coreIds.filter((id) => !present.has(id));
+  const coreSet = new Set(state.coreIds);
+  const extra = state.frame.players.map((p) => p.track_id).filter((id) => !coreSet.has(id));
+  const parts = [];
+  if (missing.length) parts.push(`Missing: ${missing.join(", ")}`);
+  if (extra.length) parts.push(`Extra: ${extra.join(", ")}`);
+  el.coreStatus.textContent = parts.length
+    ? parts.join(" · ")
+    : "OK — all core players present, no extras.";
+  el.coreStatus.classList.toggle("warn-text", parts.length > 0);
+}
+
+async function jumpToIssue(dir) {
+  if (!state.coreIds.length) {
+    el.coreWarn.textContent = "Configure core ids first.";
+    if (!state.coreMode) toggleCoreMode();
+    return;
+  }
+  await flushSave();
+  try {
+    const r = await fetch(`/api/frame_issues/nearest?from=${state.idx}&dir=${dir}`);
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      el.coreWarn.textContent = `Lookup failed: ${msg}`;
+      return;
+    }
+    const data = await r.json();
+    if (data.frame == null) {
+      el.coreWarn.textContent = dir === "next"
+        ? "No more issue frames after this one."
+        : "No issue frames before this one.";
+      return;
+    }
+    el.coreWarn.textContent = "";
+    await loadFrame(data.frame);
+    if (state.coreMode) syncCorePanel();
+  } catch (e) {
+    el.coreWarn.textContent = `Lookup failed: ${e}`;
+  }
+}
+
 // Refresh current frame + neighbors from the server, used after any change to
 // exclusion areas (which may have purged boxes across all frames).
 async function reloadAround() {
@@ -853,7 +961,9 @@ function setSelection(sel) {
 
 function syncBoxList() {
   el.boxList.innerHTML = "";
+  const filter = state.boxFilter;
   const addItem = (label, color, sel) => {
+    if (filter && !label.toLowerCase().includes(filter)) return;
     const li = document.createElement("li");
     const sw = document.createElement("span");
     sw.className = "swatch"; sw.style.background = color;
@@ -875,6 +985,7 @@ function syncBoxList() {
   state.exclusionAreas.forEach((a, i) => {
     addItem("Exclusion area", COLORS.exclusion, { type: "area", index: i });
   });
+  updateCoreStatus();
 }
 
 function syncForm() {
@@ -1265,7 +1376,9 @@ function isEditingField() {
 
 function onKeyDown(ev) {
   if (isEditingField()) return;
-  if (ev.key === "ArrowLeft") { ev.preventDefault(); loadFrame(state.idx - 1); }
+  if (ev.key === "ArrowLeft" && ev.shiftKey) { ev.preventDefault(); jumpToIssue("prev"); }
+  else if (ev.key === "ArrowRight" && ev.shiftKey) { ev.preventDefault(); jumpToIssue("next"); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); loadFrame(state.idx - 1); }
   else if (ev.key === "ArrowRight") { ev.preventDefault(); loadFrame(state.idx + 1); }
   else if (ev.key === "Delete" || ev.key === "Backspace") { ev.preventDefault(); deleteSelected(); }
 }
@@ -1293,14 +1406,16 @@ function sizeCanvases() {
 // ---- init -----------------------------------------------------------------
 async function init() {
   const ids = ["prevBtn", "nextBtn", "frameLabel", "jumpInput", "videoName", "saveStatus",
-    "prevCanvas", "nextCanvas", "mainCanvas", "canvasWrap", "boxList", "metaForm", "noSelection",
+    "prevCanvas", "nextCanvas", "mainCanvas", "canvasWrap", "boxList", "boxSearchInput", "metaForm", "noSelection",
     "playerFields", "ballFields", "trackIdInput", "ballState", "kickPlayerId",
     "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn", "invertBtn", "gkCheck",
     "areaBtn", "areaFields", "deleteAreaBtn",
     "calibBtn", "calibSection", "calibLen", "calibWid", "calibList", "calibHint",
     "calibPreset", "calibSaveBtn", "calibWarn",
     "arcBtn", "arcSection", "arcList", "arcStart", "arcEnd", "arcHeight",
-    "arcAddBtn", "arcWarn"];
+    "arcAddBtn", "arcWarn",
+    "coreBtn", "coreSection", "coreIdsInput", "coreSaveBtn", "coreWarn",
+    "coreStatus", "corePrevBtn", "coreNextBtn"];
   for (const id of ids) el[id] = document.getElementById(id);
 
   state.meta = await (await fetch("/api/meta")).json();
@@ -1309,6 +1424,7 @@ async function init() {
   }));
   await loadCalibration();
   loadBallTrajectories();
+  loadCoreIds();
   el.videoName.textContent = state.meta.video;
   sizeCanvases();
 
@@ -1320,6 +1436,10 @@ async function init() {
   el.prevBtn.onclick = () => loadFrame(state.idx - 1);
   el.nextBtn.onclick = () => loadFrame(state.idx + 1);
   el.jumpInput.onchange = () => loadFrame(parseInt(el.jumpInput.value, 10) || 0);
+  el.boxSearchInput.oninput = () => {
+    state.boxFilter = el.boxSearchInput.value.trim().toLowerCase();
+    syncBoxList();
+  };
   el.invertBtn.onclick = invertTeams;
   el.areaBtn.onclick = toggleAreaMode;
   el.deleteAreaBtn.onclick = deleteAreaSelected;
@@ -1328,6 +1448,10 @@ async function init() {
   el.calibPreset.onchange = applyCalibPreset;
   el.arcBtn.onclick = toggleArcMode;
   el.arcAddBtn.onclick = addTrajectory;
+  el.coreBtn.onclick = toggleCoreMode;
+  el.coreSaveBtn.onclick = saveCoreIds;
+  el.corePrevBtn.onclick = () => jumpToIssue("prev");
+  el.coreNextBtn.onclick = () => jumpToIssue("next");
 
   el.metaForm.addEventListener("input", onFormInputLive);
   el.metaForm.addEventListener("change", onFormChange);

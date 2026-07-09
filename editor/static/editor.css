@@ -96,6 +96,7 @@ main {
 #sidebar section { background: #fff; border-radius: 6px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
 #sidebar h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: #4b5563; }
 
+#boxSearchInput { width: 100%; margin-bottom: 8px; }
 #boxList { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
 #boxList li {
   display: flex; align-items: center; gap: 8px;
@@ -151,3 +152,10 @@ main {
 #arcSection input[type="number"] { width: 100%; }
 #arcSection .field { margin-bottom: 10px; }
 #arcAddBtn { margin-top: 4px; width: 100%; }
+
+/* Core players panel */
+#coreIdsInput { width: 100%; font-family: inherit; resize: vertical; }
+#coreSaveBtn { margin-top: 4px; width: 100%; }
+#coreStatus.warn-text { color: #9a5b00; font-weight: 600; }
+.nav-row { display: flex; gap: 8px; margin-top: 12px; }
+.nav-row button { flex: 1 1 0; }
