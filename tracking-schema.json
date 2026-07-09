@@ -22,11 +22,15 @@
             "properties": {
               "x": {
                 "type": "number",
-                "description": "Meters from center of pitch"
+                "description": "Meters from center of pitch, along the length of the pitch"
               },
               "y": {
                 "type": "number",
-                "description": "Meters from center of pitch"
+                "description": "Meters from center of pitch, along the width of the pitch"
+              },
+              "z": {
+                "type": "number",
+                "description": "Meters off the ground"
               },
               "state": {
                 "type": "string",
@@ -90,11 +94,15 @@
                 },
                 "x": {
                   "type": "number",
-                  "description": "meters from center of pitch"
+                  "description": "Meters from center of pitch, along the length of the pitch"
                 },
                 "y": {
                   "type": "number",
-                  "description": "meters from center of pitch"
+                  "description": "Meters from center of pitch, along the width of the pitch"
+                },
+                "z": {
+                  "type": "number",
+                  "description": "Meters off the ground"
                 }
               },
               "required": [
