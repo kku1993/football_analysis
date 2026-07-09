@@ -40,6 +40,7 @@ button {
   font-size: 14px;
 }
 button:hover { background: #48597096; background: #4a5d76; }
+button.active { background: #ffd60a; color: #1f2733; }
 button.danger { background: #b4272c; margin-top: 12px; width: 100%; }
 button.danger:hover { background: #cc2f34; }
 
@@ -115,3 +116,26 @@ main {
 .muted { color: #6b7280; font-size: 14px; }
 .warn { color: #9a5b00; font-size: 12px; margin-top: 4px; }
 .hidden { display: none; }
+
+/* Calibration panel */
+#calibSection input[type="number"] { width: 100%; }
+#calibList { list-style: none; margin: 8px 0 4px; padding: 0; }
+#calibList .calib-pt {
+  display: grid; grid-template-columns: 20px 1fr auto; gap: 8px;
+  align-items: center; padding: 6px 0; border-bottom: 1px solid #eef1f5;
+}
+#calibList .calib-idx {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%; background: #ffd60a;
+  color: #1f2733; font-size: 11px; font-weight: 700;
+}
+#calibList .calib-pix { font-size: 12px; }
+#calibList .calib-coords { display: flex; align-items: center; gap: 4px; }
+#calibList .calib-coords label { font-size: 12px; color: #6b7280; width: 10px; }
+#calibList .calib-coords input { width: 60px; padding: 3px 5px; font-size: 13px; }
+#calibList .calib-del {
+  background: transparent; color: #b4272c; padding: 2px 6px; font-size: 13px;
+}
+#calibList .calib-del:hover { background: #fbe9ea; }
+#calibPreset { width: 100%; margin-top: 4px; }
+#calibSaveBtn { margin-top: 8px; width: 100%; }

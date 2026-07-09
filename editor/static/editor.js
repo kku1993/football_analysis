@@ -12,6 +12,7 @@ const COLORS = {
   Offence: "#e5484d",
   ball: "#30a46c",
   selected: "#ffd60a",
+  exclusion: "#e5484d",
 };
 const NEIGHBOR_H = 150;      // px, drawing height of the prev/next frames
 const HANDLE_SIZE = 8;       // px, canvas space
@@ -33,14 +34,19 @@ const state = {
   frame: null,       // current annotation { players:[], ball:null|{} }
   prevFrame: null,
   nextFrame: null,
-  selected: null,    // { type:'player', index:int } | { type:'ball' } | null
+  selected: null,    // { type:'player', index:int } | { type:'ball' } | { type:'area', index:int } | null
   selectedTrackId: null,  // committed track_id of the selected player (for rename propagation)
   mode: "idle",      // idle | drawing | moving | resizing
-  drag: null,        // per-mode scratch data (image coords)
+  drag: null,        // per-mode scratch data (image coords); drawing.drag.kind in {'box'|'area'}
   images: new Map(),  // idx -> Image
   saveTimer: null,
   dirty: false,
   saving: false,
+  exclusionAreas: [],   // [{id:int, bbox:[x1,y1,x2,y2]}] -- global, applies to every frame
+  areaDrawMode: false,  // when true, drag on the canvas draws a new exclusion area
+  calibration: { pitch_length: 105, pitch_width: 68, points: [] },  // global per-video; loaded from /api/calibration
+  calibMode: false,     // when true, canvas clicks add calibration points and the sidebar shows the calibration panel
+  calibDirty: false,
 };
 
 const el = {};       // cached DOM nodes
@@ -74,6 +80,35 @@ function preloadNeighbors() {
 }
 
 // ---- drawing --------------------------------------------------------------
+function drawAreaOn(ctx, scale, bbox, opts = {}) {
+  const [x1, y1, x2, y2] = bbox;
+  const w = (x2 - x1) * scale, h = (y2 - y1) * scale;
+  ctx.save();
+  ctx.fillStyle = "rgba(229, 72, 77, 0.18)";
+  ctx.fillRect(x1 * scale, y1 * scale, w, h);
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = opts.selected ? 3 : 2;
+  ctx.strokeStyle = opts.selected ? COLORS.selected : COLORS.exclusion;
+  ctx.strokeRect(x1 * scale, y1 * scale, w, h);
+  ctx.setLineDash([]);
+  ctx.font = "12px sans-serif";
+  const label = "Exclusion";
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = COLORS.exclusion;
+  ctx.fillRect(x1 * scale, y1 * scale - 15, tw + 8, 15);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(label, x1 * scale + 4, y1 * scale - 4);
+  if (opts.selected) {
+    ctx.fillStyle = COLORS.selected;
+    for (const h of HANDLES) {
+      const hx = (x1 + h.fx * (x2 - x1)) * scale;
+      const hy = (y1 + h.fy * (y2 - y1)) * scale;
+      ctx.fillRect(hx - HANDLE_SIZE / 2, hy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    }
+  }
+  ctx.restore();
+}
+
 function drawBoxOn(ctx, scale, bbox, color, opts = {}) {
   const [x1, y1, x2, y2] = bbox;
   ctx.lineWidth = opts.selected ? 3 : 2;
@@ -119,6 +154,13 @@ function renderFrameTo(canvas, idx, annotation, opts = {}) {
     } else {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+    // Exclusion areas live below boxes and are global (shown on every frame).
+    for (let i = 0; i < state.exclusionAreas.length; i++) {
+      const a = state.exclusionAreas[i];
+      const sel = opts.selectable && state.selected &&
+                  state.selected.type === "area" && state.selected.index === i;
+      drawAreaOn(ctx, scale, a.bbox, { selected: sel });
     }
     for (let i = 0; i < annotation.players.length; i++) {
       const p = annotation.players[i];
@@ -126,21 +168,48 @@ function renderFrameTo(canvas, idx, annotation, opts = {}) {
                   state.selected.type === "player" && state.selected.index === i;
       const label = p.role === "GoalKeeper" ? `${p.track_id} GK` : p.track_id;
       drawBoxOn(ctx, scale, p.bbox, COLORS[p.team] || COLORS.Defence,
-                { label, selected: sel });
+                 { label, selected: sel });
     }
     if (annotation.ball) {
       const sel = opts.selectable && state.selected && state.selected.type === "ball";
       drawBoxOn(ctx, scale, annotation.ball.bbox, COLORS.ball,
-                { label: "ball", selected: sel });
+                 { label: "ball", selected: sel });
     }
-    // rubber-band preview for a box being drawn
+    // rubber-band preview for a box (or exclusion area) being drawn
     if (opts.selectable && state.mode === "drawing" && state.drag) {
       const b = state.drag.box;
-      ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(b[0] * scale, b[1] * scale, (b[2] - b[0]) * scale, (b[3] - b[1]) * scale);
-      ctx.setLineDash([]);
+      const isArea = state.drag.kind === "area";
+      if (isArea) {
+        drawAreaOn(ctx, scale, b, {});
+      } else {
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(b[0] * scale, b[1] * scale, (b[2] - b[0]) * scale, (b[3] - b[1]) * scale);
+        ctx.setLineDash([]);
+      }
+    }
+    // Calibration points: numbered markers, shown only on the main canvas
+    // (annotation === state.frame) and only in calibration mode. They are
+    // referenced to frame 0's pixel space (camera movement is zero there).
+    if (state.calibMode && annotation === state.frame) {
+      ctx.save();
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      state.calibration.points.forEach((p, i) => {
+        const cx = p.pixel[0] * scale, cy = p.pixel[1] * scale;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 9, 0, 2 * Math.PI);
+        ctx.fillStyle = "#ffd60a";
+        ctx.fill();
+        ctx.strokeStyle = "#1f2733";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = "#1f2733";
+        ctx.fillText(String(i + 1), cx, cy + 0.5);
+      });
+      ctx.restore();
     }
   };
 
@@ -171,9 +240,36 @@ function boxAtPoint(px, py) {
   return best;
 }
 
+// Areas are a fallback selection: preferred only when no box is hit at this
+// point. Smallest containing area wins, so nested areas select the innermost.
+function areaAtPoint(px, py) {
+  let best = null, bestArea = Infinity;
+  for (let i = 0; i < state.exclusionAreas.length; i++) {
+    const [x1, y1, x2, y2] = state.exclusionAreas[i].bbox;
+    if (px >= x1 && px <= x2 && py >= y1 && py <= y2) {
+      const area = (x2 - x1) * (y2 - y1);
+      if (area < bestArea) { bestArea = area; best = { type: "area", index: i }; }
+    }
+  }
+  return best;
+}
+
+// True when ``bbox`` is fully contained inside ANY exclusion area. Used to
+// enforce the invariant at edit time (before the server-side purge backstop).
+function fullyContainedInAny(bbox) {
+  if (!state.exclusionAreas.length) return false;
+  const [bx1, by1, bx2, by2] = bbox;
+  for (const a of state.exclusionAreas) {
+    const [ax1, ay1, ax2, ay2] = a.bbox;
+    if (ax1 <= bx1 && ay1 <= by1 && ax2 >= bx2 && ay2 >= by2) return true;
+  }
+  return false;
+}
+
 function selectedBox() {
   if (!state.selected) return null;
   if (state.selected.type === "ball") return state.frame.ball;
+  if (state.selected.type === "area") return state.exclusionAreas[state.selected.index];
   return state.frame.players[state.selected.index];
 }
 
@@ -204,6 +300,24 @@ function mouseToImage(ev) {
 function onMouseDown(ev) {
   const { x, y } = mouseToImage(ev);
 
+  // In calibration mode every click on the main canvas adds a calibration
+  // point (pixel -> pitch correspondence). Selection / drawing / moving are
+  // suspended while calibrating. Points are valid only on frame 0; the mode
+  // toggle warns the human if they are elsewhere.
+  if (state.calibMode) {
+    addCalibPointAt(x, y);
+    return;
+  }
+
+  // In area-draw mode every drag becomes a new exclusion area, regardless of
+  // what is underneath (boxes/areas are not selectable in this mode). Toggle
+  // the button off to edit existing selection again.
+  if (state.areaDrawMode) {
+    state.mode = "drawing";
+    state.drag = { kind: "area", startX: x, startY: y, box: [x, y, x, y] };
+    return;
+  }
+
   // resize? (only if a box is selected and we hit one of its handles)
   const h = handleAtPoint(x, y);
   if (h) {
@@ -221,9 +335,19 @@ function onMouseDown(ev) {
     return;
   }
 
+  // An exclusion area beneath the cursor is selectable when no box is.
+  const ahit = areaAtPoint(x, y);
+  if (ahit) {
+    setSelection(ahit);
+    state.mode = "moving";
+    state.drag = { startX: x, startY: y, box: selectedBox().bbox.slice() };
+    renderAll();
+    return;
+  }
+
   // empty space -> begin drawing a new box
   state.mode = "drawing";
-  state.drag = { startX: x, startY: y, box: [x, y, x, y] };
+  state.drag = { kind: "box", startX: x, startY: y, box: [x, y, x, y] };
 }
 
 function onMouseMove(ev) {
@@ -258,9 +382,12 @@ async function onMouseUp(ev) {
   if (state.mode === "drawing") {
     const b = state.drag.box;
     const dragPx = Math.max(Math.abs(imgToCan(b[2] - b[0])), Math.abs(imgToCan(b[3] - b[1])));
+    const kind = state.drag.kind;
     state.mode = "idle";
     if (dragPx >= MIN_DRAG) {
-      await createBox(normalizeBox(b));
+      const norm = normalizeBox(b);
+      if (kind === "area") await createArea(norm);
+      else await createBox(norm);
     } else {
       // treated as a click on empty space -> deselect
       setSelection(null);
@@ -276,6 +403,32 @@ async function onMouseUp(ev) {
     state.mode = "idle";
     state.drag = null;
     renderAll();
+
+    // An exclusion area edit is persisted via its own endpoint (and triggers a
+    // server-side purge), not the per-frame PUT.
+    if (state.selected && state.selected.type === "area") {
+      await updateArea();
+      return;
+    }
+
+    // Enforce the containment invariant locally: if a box was dragged /
+    // resized so it now sits fully inside an exclusion area, drop it. The
+    // server's purge on PUT is a backstop for any races.
+    if (state.selected) {
+      const sel = state.selected;
+      if (sel.type === "player") {
+        const p = state.frame.players[sel.index];
+        if (p && fullyContainedInAny(p.bbox)) {
+          state.frame.players.splice(sel.index, 1);
+          setSelection(null);
+          renderAll();
+        }
+      } else if (sel.type === "ball" && state.frame.ball && fullyContainedInAny(state.frame.ball.bbox)) {
+        state.frame.ball = null;
+        setSelection(null);
+        renderAll();
+      }
+    }
     markDirty();
     return;
   }
@@ -284,6 +437,13 @@ async function onMouseUp(ev) {
 }
 
 async function createBox(bbox) {
+  // Boxes drawn inside an exclusion area are never created: the invariant must
+  // hold at every moment, so reject the drag silently.
+  if (fullyContainedInAny(bbox)) {
+    renderAll();
+    return;
+  }
+
   // Default new boxes to "ball"; only one ball allowed per frame, so fall
   // back to creating a player once a ball already exists.
   if (!state.frame.ball) {
@@ -305,6 +465,255 @@ async function createBox(bbox) {
   markDirty();
   el.trackIdInput.focus();
   el.trackIdInput.select();
+}
+
+// ---- exclusion areas -----------------------------------------------------
+function toggleAreaMode() {
+  state.areaDrawMode = !state.areaDrawMode;
+  el.areaBtn.classList.toggle("active", state.areaDrawMode);
+}
+
+async function createArea(bbox) {
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/exclusion_areas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bbox }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Create area failed: ${msg}`;
+      return;
+    }
+    const data = await r.json();
+    state.exclusionAreas.push({ id: data.id, bbox });
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+    // Server purged every frame; reload current + neighbors so the preview
+    // reflects the same state the server now holds.
+    await reloadAround();
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Create area failed: ${e}`;
+  }
+}
+
+async function updateArea() {
+  const sel = state.selected;
+  if (!sel || sel.type !== "area") return;
+  const a = state.exclusionAreas[sel.index];
+  setSaveStatus("saving");
+  try {
+    const r = await fetch(`/api/exclusion_areas/${a.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bbox: a.bbox.map(Number) }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Update area failed: ${msg}`;
+      return;
+    }
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+    await reloadAround();
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Update area failed: ${e}`;
+  }
+}
+
+async function deleteAreaSelected() {
+  const sel = state.selected;
+  if (!sel || sel.type !== "area") return;
+  const a = state.exclusionAreas[sel.index];
+  // Optimistic removal; previously-purged boxes are intentionally not restored.
+  state.exclusionAreas.splice(sel.index, 1);
+  setSelection(null);
+  renderAll();
+  setSaveStatus("saving");
+  try {
+    const r = await fetch(`/api/exclusion_areas/${a.id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.saveStatus.title = `Delete area failed: ${msg}`;
+      return;
+    }
+    setSaveStatus("saved");
+    el.saveStatus.title = "";
+  } catch (e) {
+    setSaveStatus("error");
+    el.saveStatus.title = `Delete area failed: ${e}`;
+  }
+}
+
+// ---- pitch calibration ---------------------------------------------------
+// Global per-video pixel -> pitch correspondences. The homography is built
+// from these (>=4 non-collinear). They are referenced to frame 0's pixel
+// space -- camera movement is zero there and the exporter subtracts the
+// per-frame camera offset from every later box before applying the transform,
+// so calibrating on frame 0 covers all frames.
+async function loadCalibration() {
+  let cal = state.meta && state.meta.calibration;
+  if (!cal) {
+    try { cal = await (await fetch("/api/calibration")).json(); }
+    catch (e) { cal = null; }
+  }
+  state.calibration = cal
+    ? { pitch_length: cal.pitch_length, pitch_width: cal.pitch_width,
+        points: (cal.points || []).map((p) => ({
+          pixel: [Number(p.pixel[0]), Number(p.pixel[1])],
+          pitch: [Number(p.pitch[0]), Number(p.pitch[1])],
+        })) }
+    : { pitch_length: 105, pitch_width: 68, points: [] };
+  state.calibDirty = false;
+}
+
+async function toggleCalibMode() {
+  state.calibMode = !state.calibMode;
+  el.calibBtn.classList.toggle("active", state.calibMode);
+  el.calibSection.classList.toggle("hidden", !state.calibMode);
+  // Leaving the box form's radio inputs / area fields visible alongside the
+  // calibration panel would be confusing; drop any selection.
+  setSelection(null);
+  if (state.calibMode) {
+    if (state.idx !== 0) {
+      if (confirm("Calibration points must be marked on frame 0 (camera movement is referenced there). Jump to frame 0 now?")) {
+        await loadFrame(0);
+      }
+    }
+    syncCalibPanel();
+  }
+  renderAll();
+}
+
+function markCalibDirty() {
+  state.calibDirty = true;
+  if (el.calibWarn) el.calibWarn.textContent = "Unsaved changes.";
+}
+
+function addCalibPointAt(x, y) {
+  // Default pitch coord = pitch center; refined via the panel inputs / preset.
+  const L = parseFloat(el.calibLen.value) || state.calibration.pitch_length;
+  const W = parseFloat(el.calibWid.value) || state.calibration.pitch_width;
+  state.calibration.points.push({
+    pixel: [Math.round(x * 100) / 100, Math.round(y * 100) / 100],
+    pitch: [L / 2, W / 2],
+  });
+  markCalibDirty();
+  syncCalibPanel();
+  renderAll();
+}
+
+function syncCalibPanel() {
+  el.calibLen.value = state.calibration.pitch_length;
+  el.calibWid.value = state.calibration.pitch_width;
+  el.calibWarn.textContent = state.calibDirty ? "Unsaved changes." : "";
+  el.calibList.innerHTML = "";
+  state.calibration.points.forEach((p, i) => {
+    const li = document.createElement("li");
+    li.className = "calib-pt";
+    const idx = document.createElement("span");
+    idx.className = "calib-idx"; idx.textContent = String(i + 1);
+    const pix = document.createElement("span");
+    pix.className = "calib-pix muted";
+    pix.textContent = `px (${Math.round(p.pixel[0])}, ${Math.round(p.pixel[1])})`;
+    const grp = document.createElement("div");
+    grp.className = "calib-coords";
+    const xlab = document.createElement("label"); xlab.textContent = "x";
+    const xin = document.createElement("input");
+    xin.type = "number"; xin.step = "0.01"; xin.value = p.pitch[0];
+    const ylab = document.createElement("label"); ylab.textContent = "y";
+    const yin = document.createElement("input");
+    yin.type = "number"; yin.step = "0.01"; yin.value = p.pitch[1];
+    xin.oninput = () => { p.pitch[0] = parseFloat(xin.value) || 0; markCalibDirty(); };
+    yin.oninput = () => { p.pitch[1] = parseFloat(yin.value) || 0; markCalibDirty(); };
+    grp.appendChild(xlab); grp.appendChild(xin); grp.appendChild(ylab); grp.appendChild(yin);
+    const del = document.createElement("button");
+    del.type = "button"; del.textContent = "✕"; del.className = "calib-del";
+    del.onclick = () => {
+      state.calibration.points.splice(i, 1);
+      markCalibDirty();
+      syncCalibPanel();
+      renderAll();
+    };
+    li.appendChild(idx); li.appendChild(pix); li.appendChild(grp); li.appendChild(del);
+    el.calibList.appendChild(li);
+  });
+  const n = state.calibration.points.length;
+  el.calibHint.textContent = n === 0
+    ? "Click on the frame to add a point."
+    : `${n} point(s). Need >= 4. Click on the frame to add more.`;
+}
+
+async function saveCalibration() {
+  const L = parseFloat(el.calibLen.value);
+  const W = parseFloat(el.calibWid.value);
+  if (!(L > 0) || !(W > 0)) {
+    el.calibWarn.textContent = "Pitch length and width must be positive.";
+    return;
+  }
+  if (state.calibration.points.length < 4) {
+    el.calibWarn.textContent = "Need at least 4 pixel -> pitch correspondences.";
+    return;
+  }
+  state.calibration.pitch_length = L;
+  state.calibration.pitch_width = W;
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/calibration", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.calibration),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error");
+      el.calibWarn.textContent = `Save failed: ${msg}`;
+      return;
+    }
+    state.calibDirty = false;
+    el.calibWarn.textContent = "Saved.";
+    setSaveStatus("saved");
+  } catch (e) {
+    setSaveStatus("error");
+    el.calibWarn.textContent = `Save failed: ${e}`;
+  }
+}
+
+function applyCalibPreset() {
+  const v = el.calibPreset.value;
+  el.calibPreset.value = "";
+  if (!v) return;
+  const pts = state.calibration.points;
+  if (pts.length === 0) {
+    el.calibWarn.textContent = "Add a point on the frame first, then pick a preset.";
+    return;
+  }
+  const [px, py] = v.split(",").map(Number);
+  pts[pts.length - 1].pitch = [px, py];
+  markCalibDirty();
+  syncCalibPanel();
+  renderAll();
+}
+
+// Refresh current frame + neighbors from the server, used after any change to
+// exclusion areas (which may have purged boxes across all frames).
+async function reloadAround() {
+  const idx = state.idx;
+  const [cur, prev, next] = await Promise.all([
+    fetchFrame(idx),
+    idx - 1 >= 0 ? fetchFrame(idx - 1) : Promise.resolve(null),
+    idx + 1 < state.meta.frame_count ? fetchFrame(idx + 1) : Promise.resolve(null),
+  ]);
+  state.frame = cur;
+  state.prevFrame = prev;
+  state.nextFrame = next;
+  renderAll();
 }
 
 // ---- selection + form -----------------------------------------------------
@@ -334,13 +743,26 @@ function syncBoxList() {
     addItem(`#${p.track_id} · ${p.team}${gk}`, COLORS[p.team] || COLORS.Defence, { type: "player", index: i });
   });
   if (state.frame.ball) addItem("Ball", COLORS.ball, { type: "ball" });
+  // Exclusion areas listed after boxes; index is into state.exclusionAreas.
+  state.exclusionAreas.forEach((a, i) => {
+    addItem("Exclusion area", COLORS.exclusion, { type: "area", index: i });
+  });
 }
 
 function syncForm() {
   const sel = state.selected;
+  el.areaFields.classList.add("hidden");
   if (!sel) {
     el.metaForm.classList.add("hidden");
     el.noSelection.classList.remove("hidden");
+    return;
+  }
+  if (sel.type === "area") {
+    // Areas have no per-instance attributes beyond geometry; the meta form is
+    // irrelevant. Show the dedicated area panel instead.
+    el.metaForm.classList.add("hidden");
+    el.noSelection.classList.add("hidden");
+    el.areaFields.classList.remove("hidden");
     return;
   }
   el.metaForm.classList.remove("hidden");
@@ -544,6 +966,10 @@ async function deleteSelected() {
   const sel = state.selected;
   if (!sel) return;
 
+  if (sel.type === "area") {
+    return deleteAreaSelected();
+  }
+
   if (sel.type === "ball") {
     state.frame.ball = null;
     setSelection(null);
@@ -741,10 +1167,17 @@ async function init() {
   const ids = ["prevBtn", "nextBtn", "frameLabel", "jumpInput", "videoName", "saveStatus",
     "prevCanvas", "nextCanvas", "mainCanvas", "canvasWrap", "boxList", "metaForm", "noSelection",
     "playerFields", "ballFields", "trackIdInput", "ballState", "kickPlayerId",
-    "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn", "invertBtn", "gkCheck"];
+    "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn", "invertBtn", "gkCheck",
+    "areaBtn", "areaFields", "deleteAreaBtn",
+    "calibBtn", "calibSection", "calibLen", "calibWid", "calibList", "calibHint",
+    "calibPreset", "calibSaveBtn", "calibWarn"];
   for (const id of ids) el[id] = document.getElementById(id);
 
   state.meta = await (await fetch("/api/meta")).json();
+  state.exclusionAreas = (state.meta.exclusion_areas || []).map((a) => ({
+    id: a.id, bbox: a.bbox.map(Number),
+  }));
+  await loadCalibration();
   el.videoName.textContent = state.meta.video;
   sizeCanvases();
 
@@ -757,13 +1190,23 @@ async function init() {
   el.nextBtn.onclick = () => loadFrame(state.idx + 1);
   el.jumpInput.onchange = () => loadFrame(parseInt(el.jumpInput.value, 10) || 0);
   el.invertBtn.onclick = invertTeams;
+  el.areaBtn.onclick = toggleAreaMode;
+  el.deleteAreaBtn.onclick = deleteAreaSelected;
+  el.calibBtn.onclick = toggleCalibMode;
+  el.calibSaveBtn.onclick = saveCalibration;
+  el.calibPreset.onchange = applyCalibPreset;
 
   el.metaForm.addEventListener("input", onFormInputLive);
   el.metaForm.addEventListener("change", onFormChange);
   el.deleteBtn.onclick = deleteSelected;
 
-  // flush a pending save if the user closes/reloads the tab
-  window.addEventListener("beforeunload", () => { if (state.dirty) flushSave(); });
+  // flush a pending save if the user closes/reloads the tab. The calibration
+  // panel has its own save button (it is a separate put, not part of the
+  // per-frame autosave); flush it too on unload to avoid losing edits.
+  window.addEventListener("beforeunload", () => {
+    if (state.dirty) flushSave();
+    if (state.calibDirty) saveCalibration();
+  });
 
   // re-fit the current frame when the window resizes
   let resizeTimer = null;

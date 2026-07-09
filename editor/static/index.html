@@ -18,6 +18,8 @@
       <input id="jumpInput" type="number" min="0" step="1" value="0">
     </div>
     <div class="actions">
+      <button id="calibBtn" title="Toggle pitch-calibration mode (mark pixel -> pitch correspondences on frame 0)">⊕ Calibration</button>
+      <button id="areaBtn" title="Toggle exclusion-area drawing mode">⬚ Exclusion area</button>
       <button id="invertBtn" title="Swap Offence/Defence for every player in every frame">⇄ Invert teams</button>
     </div>
     <div class="status">
@@ -42,7 +44,7 @@
       <div id="canvasWrap">
         <canvas id="mainCanvas"></canvas>
       </div>
-      <p class="hint">Drag on empty space to create a box · click to select · drag to move · drag a handle to resize · Delete to remove</p>
+      <p class="hint">Drag on empty space to create a box · click to select · drag to move · drag a handle to resize · Delete to remove · toggle “Exclusion area” to draw exclusion regions</p>
     </div>
 
     <aside id="sidebar">
@@ -51,9 +53,57 @@
         <ul id="boxList"></ul>
       </section>
 
+      <section id="calibSection" class="hidden">
+        <h2>Pitch calibration</h2>
+        <p class="muted">Mark &ge;4 pixel &rarr; pitch correspondences. Camera movement is referenced to <strong>frame 0</strong>, so points must be marked there &mdash; switch to frame 0 before placing them. Pitch coords are corner-origin meters (x: 0&hellip;length from the left goal line; y: 0&hellip;width from the top touchline). The exporter centers the origin afterward.</p>
+        <div class="field">
+          <label>Pitch length (m)</label>
+          <input id="calibLen" type="number" step="0.01" min="1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Pitch width (m)</label>
+          <input id="calibWid" type="number" step="0.01" min="1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Calibration points</label>
+          <ul id="calibList"></ul>
+          <p class="muted" id="calibHint">Click on the frame to add a point.</p>
+        </div>
+        <div class="field">
+          <label>Quick-add preset (apply to the last point)</label>
+          <select id="calibPreset">
+            <option value="">-- choose a pitch landmark --</option>
+            <option value="0,0">Top-left corner (0, 0)</option>
+            <option value="0,68">Bottom-left corner (0, 68)</option>
+            <option value="105,0">Top-right corner (105, 0)</option>
+            <option value="105,68">Bottom-right corner (105, 68)</option>
+            <option value="52.5,34">Center spot (52.5, 34)</option>
+            <option value="11,34">Left penalty spot (11, 34)</option>
+            <option value="94,34">Right penalty spot (94, 34)</option>
+            <option value="16.5,13.84">Left penalty-box top corner (16.5, 13.84)</option>
+            <option value="16.5,54.16">Left penalty-box bottom corner (16.5, 54.16)</option>
+            <option value="88.5,13.84">Right penalty-box top corner (88.5, 13.84)</option>
+            <option value="88.5,54.16">Right penalty-box bottom corner (88.5, 54.16)</option>
+            <option value="5.5,24.84">Left goal-area top corner (5.5, 24.84)</option>
+            <option value="5.5,43.16">Left goal-area bottom corner (5.5, 43.16)</option>
+            <option value="99.5,24.84">Right goal-area top corner (99.5, 24.84)</option>
+            <option value="99.5,43.16">Right goal-area bottom corner (99.5, 43.16)</option>
+          </select>
+        </div>
+        <button type="button" id="calibSaveBtn">Save calibration</button>
+        <p class="warn" id="calibWarn"></p>
+      </section>
+
       <section id="formSection">
         <h2>Selected box</h2>
         <div id="noSelection" class="muted">No box selected.</div>
+
+        <div id="areaFields" class="hidden">
+          <p class="muted">Exclusion area — applies to <strong>every</strong> frame. Any player or ball box fully inside this rectangle is automatically removed.</p>
+          <p class="muted">Drag the body to move; drag a handle to resize.</p>
+          <p class="warn">Boxes removed by an area are <strong>not</strong> restored when the area is deleted.</p>
+          <button type="button" id="deleteAreaBtn" class="danger">Delete area</button>
+        </div>
 
         <form id="metaForm" class="hidden">
           <div class="field">

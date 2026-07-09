@@ -20,6 +20,12 @@ import os
 import cv2
 
 from pipeline import run_pipeline
+from view_transformer import (
+    DEFAULT_PIXEL_VERTICES,
+    DEFAULT_TARGET_VERTICES,
+    DEFAULT_PITCH_LENGTH,
+    DEFAULT_PITCH_WIDTH,
+)
 
 # Team integer (from the pipeline) -> schema enum. Established in the deleted
 # tracking_output.py; recover with `git show 5ad880f:tracking_output.py`.
@@ -29,6 +35,26 @@ DEFAULT_VIDEO = "input_videos/arg-egy-14_57-goal.mp4"
 EDITOR_DATA_DIR = "editor_data"
 FRAMES_DIR = os.path.join(EDITOR_DATA_DIR, "frames")
 ANNOTATIONS_PATH = os.path.join(EDITOR_DATA_DIR, "annotations.json")
+
+
+def default_calibration():
+    """The seed calibration block written into ``annotations.json``.
+
+    Mirrors the per-sample hardcoded values that ``ViewTransformer`` used to
+    carry alone, so a freshly-generated file reproduces the existing export
+    output exactly. The human is expected to refine this in the editor (the
+    pixel trapezoid only spans ~23 m of the pitch; recalibrating to span more
+    -- or to a different camera view -- is the whole point of editing it).
+    """
+    return {
+        "pitch_length": DEFAULT_PITCH_LENGTH,
+        "pitch_width": DEFAULT_PITCH_WIDTH,
+        "points": [
+            {"pixel": list(DEFAULT_PIXEL_VERTICES[i]),
+             "pitch": list(DEFAULT_TARGET_VERTICES[i])}
+            for i in range(len(DEFAULT_PIXEL_VERTICES))
+        ],
+    }
 
 # Zero-padding width for frame filenames (supports up to 99,999 frames). Frames
 # are indexed by integer everywhere; filenames are never parsed back to indices.
@@ -99,6 +125,7 @@ def generate(video_path, force=False):
         "fps": fps,
         "frame_count": frame_count,
         "frames": frames_out,
+        "calibration": default_calibration(),
     }
 
     tmp = ANNOTATIONS_PATH + ".tmp"

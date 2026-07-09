@@ -26,12 +26,19 @@ Adapted from the deleted ``tracking_output.py`` (``git show
 interpolation; here we read boxes from ``annotations.json`` instead of the
 pipeline's ``tracks``, and reference the origin to the true pitch center.
 
-GENERALIZATION CAVEAT: the metric conversion is only as good as
-``ViewTransformer.pixel_vertices``, a hardcoded calibration for the SAMPLE
-video's camera view. The pixel-space editor (generate / server / frontend) is
-fully video-agnostic, but this export step inherits the pipeline's per-video
-calibration and must be recalibrated per camera setup, exactly as ``main.py``
-already requires. We do not attempt auto-calibration.
+GENERALIZATION CAVEAT: the metric conversion is only as good as the
+``calibration`` block in ``annotations.json``. The editor (generate / server /
+frontend) lets the human mark >= 4 pixel->pitch correspondences on frame 0
+(camera movement is referenced to frame 0, so the homography must live in that
+pixel space); see ``editor/server.py`` PUT /api/calibration. Older annotation
+files without a ``calibration`` field fall back to the sample hardcoded values
+baked into ``view_transformer.py`` (a ~23 m slice of the pitch), which is what
+``pipeline.py`` still uses too. Boxes fully outside the calibrated polygon --
+common for off-pitch players / out-of-bounds balls -- are extrapolated by the
+raw transform; ``_clip_to_pitch`` then saturates them at the nearest touchline,
+which can look like an axis "inversion" rather than garbage. Recalibrating to
+cover more of the visible pitch fixes boxes inside the new polygon; boxes still
+outside it will KEEP being unreliable, by projective extrapolation.
 
 Roles: the tracker merges goalkeepers into "players" with no preserved flag, so
 ``GoalKeeper`` cannot be auto-inferred; instead the human marks the goalkeeper on
@@ -75,16 +82,16 @@ def _raw_transform(view_transformer, point):
     return dst.reshape(-1, 2)[0].tolist()
 
 
-def _center_offset():
+def _center_offset(pitch_length=PITCH_LENGTH, pitch_width=PITCH_WIDTH):
     """(cx, cy) offset converting corner-origin metric -> pitch-CENTER origin.
 
     The ViewTransformer's metric plane has its origin at the near goal-line /
     top-touchline corner of the pitch (real meters). The pitch center is half a
-    pitch length/width from that corner, so subtracting (PITCH_LENGTH/2,
-    PITCH_WIDTH/2) recenters to (0,0) at the pitch center. See the module
+    pitch length/width from that corner, so subtracting (pitch_length/2,
+    pitch_width/2) recenters to (0,0) at the pitch center. See the module
     docstring for the coordinate system and the calibration assumption.
     """
-    return (PITCH_LENGTH / 2.0, PITCH_WIDTH / 2.0)
+    return (pitch_length / 2.0, pitch_width / 2.0)
 
 
 def _to_center_coords(point, offset):
@@ -92,20 +99,21 @@ def _to_center_coords(point, offset):
     return (point[0] - cx, point[1] - cy)
 
 
-def _clip_to_pitch(point):
+def _clip_to_pitch(point, pitch_length=PITCH_LENGTH, pitch_width=PITCH_WIDTH):
     """Clamp a corner-origin metric (x,y) into the pitch rectangle.
 
-    Corner-origin metric runs 0..PITCH_LENGTH in x and 0..PITCH_WIDTH in y, so a
+    Corner-origin metric runs 0..pitch_length in x and 0..pitch_width in y, so a
     projected point beyond the touchlines / goal lines (typical for a box that
     was extrapolated from outside the calibration region) is pulled back onto the
     nearest boundary rather than reported meters off the field.
     """
-    x = min(max(point[0], 0.0), PITCH_LENGTH)
-    y = min(max(point[1], 0.0), PITCH_WIDTH)
+    x = min(max(point[0], 0.0), pitch_length)
+    y = min(max(point[1], 0.0), pitch_width)
     return (x, y)
 
 
-def _player_box_position(view_transformer, bbox, cam_offset, offset):
+def _player_box_position(view_transformer, bbox, cam_offset, offset,
+                         pitch_length=PITCH_LENGTH, pitch_width=PITCH_WIDTH):
     """Corner-origin metric position for a player box.
 
     Projects all four box corners onto the pitch plane (raw/unfiltered, so boxes
@@ -132,7 +140,7 @@ def _player_box_position(view_transformer, bbox, cam_offset, offset):
         if best_d is None or d < best_d:
             best_d = d
             best = raw
-    return _clip_to_pitch(best)
+    return _clip_to_pitch(best, pitch_length, pitch_width)
 
 
 def _interpolate_gaps(positions):
@@ -212,6 +220,29 @@ def _id_sort_key(tid):
         return (1, tid)
 
 
+def _build_view_transformer(ann):
+    """Construct the pixel->metric transformer from ``ann["calibration"]``.
+
+    Returns ``(view_transformer, pitch_length, pitch_width)``. Falls back to the
+    sample hardcoded values baked into :class:`ViewTransformer` (a ~23 m slice
+    of the pitch) when the annotation file has no usable calibration -- which
+    preserves the pre-calibration-editor export behavior for old files.
+    """
+    cal = ann.get("calibration") or {}
+    pts = cal.get("points") or []
+    pl = cal.get("pitch_length") or PITCH_LENGTH
+    pw = cal.get("pitch_width") or PITCH_WIDTH
+    if len(pts) >= 4:
+        try:
+            vt = ViewTransformer.from_calibration(
+                [[p["pixel"][0], p["pixel"][1], p["pitch"][0], p["pitch"][1]] for p in pts],
+                pl, pw)
+            return vt, pl, pw
+        except (ValueError, KeyError, TypeError):
+            pass  # degenerate -- fall through to default
+    return ViewTransformer(), pl, pw
+
+
 # --- export ----------------------------------------------------------------
 def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     if not os.path.exists(annotations_path):
@@ -223,8 +254,8 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     frames = ann["frames"]
     n = len(frames)
 
-    vt = ViewTransformer()
-    offset = _center_offset()
+    vt, pitch_length, pitch_width = _build_view_transformer(ann)
+    offset = _center_offset(pitch_length, pitch_width)
     cam = _camera_movement(video_path, n)
 
     # --- Players: per-track top-left-origin metric position, then interpolate.
@@ -245,7 +276,8 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
             else:
                 player_role.setdefault(tid, "Outfield")
             seq = player_pos.setdefault(tid, [None] * n)
-            pos = _player_box_position(vt, p["bbox"], cam[f], offset)
+            pos = _player_box_position(vt, p["bbox"], cam[f], offset,
+                                        pitch_length, pitch_width)
             seq[f] = (float(pos[0]), float(pos[1]))
     for tid in player_pos:
         player_pos[tid] = _interpolate_gaps(player_pos[tid])

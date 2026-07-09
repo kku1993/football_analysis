@@ -18,7 +18,7 @@ import threading
 
 from flask import Flask, jsonify, request, send_from_directory, abort
 
-from editor.generate import ANNOTATIONS_PATH, FRAMES_DIR, FRAME_PAD
+from editor.generate import ANNOTATIONS_PATH, FRAMES_DIR, FRAME_PAD, default_calibration
 
 # Flask's send_from_directory resolves relative dirs against the package root, so
 # anchor to absolute paths derived from the current working directory instead.
@@ -41,6 +41,12 @@ def _load_annotations():
             f"{ANNOTATIONS_PATH} not found. Run `venv/bin/python -m editor.generate` first.")
     with open(ANNOTATIONS_PATH) as fh:
         _annotations = json.load(fh)
+    # Exclusion areas are a global (per-video) edit, not per-frame; backfill the
+    # field on older annotation files that predate the feature.
+    _annotations.setdefault("exclusion_areas", [])
+    # Calibration is a global per-video edit. Older files predate it: fall back
+    # to the sample default so the UI still has something to show / refine.
+    _annotations.setdefault("calibration", default_calibration())
 
 
 def _persist_locked():
@@ -120,6 +126,52 @@ def _frame_count():
     return _annotations["frame_count"]
 
 
+def _bbox_inside(area_bbox, box_bbox):
+    """True when ``box_bbox`` is fully contained within ``area_bbox``."""
+    return (area_bbox[0] <= box_bbox[0] and area_bbox[1] <= box_bbox[1]
+            and area_bbox[2] >= box_bbox[2] and area_bbox[3] >= box_bbox[3])
+
+
+def _purge_frame(frame, areas):
+    """Remove every player and the ball from ``frame`` when their bbox is fully
+    contained inside any of ``areas``. Mutates ``frame`` in place; returns count
+    removed. Players and ball are both subject to exclusion.
+    """
+    removed = 0
+    if not areas:
+        return removed
+    kept = []
+    for p in frame.get("players", []):
+        if any(_bbox_inside(a["bbox"], p["bbox"]) for a in areas):
+            removed += 1
+        else:
+            kept.append(p)
+    frame["players"] = kept
+    ball = frame.get("ball")
+    if ball is not None and any(_bbox_inside(a["bbox"], ball["bbox"]) for a in areas):
+        frame["ball"] = None
+        removed += 1
+    return removed
+
+
+def _purge_all(areas):
+    """Run ``_purge_frame`` over every frame. Caller must hold _lock."""
+    removed = 0
+    for fr in _annotations["frames"]:
+        removed += _purge_frame(fr, areas)
+    return removed
+
+
+def _next_area_id():
+    mx = 0
+    for a in _annotations.get("exclusion_areas", []):
+        try:
+            mx = max(mx, int(a["id"]))
+        except (KeyError, ValueError, TypeError):
+            continue
+    return mx + 1
+
+
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
@@ -133,7 +185,74 @@ def meta():
         "height": _annotations["height"],
         "fps": _annotations["fps"],
         "video": _annotations["video"],
+        "exclusion_areas": _annotations.get("exclusion_areas", []),
+        "calibration": _annotations.get("calibration"),
     })
+
+
+def _validate_calibration(obj):
+    """Return an error string, or None if valid. Used by GET/PUT below.
+
+    Shape: ``{"pitch_length": float, "pitch_width": float, "points":
+    [{"pixel": [x, y], "pitch": [mx, my]}, ...]}``. ``pixel`` coords are in
+    frame-0 image-space pixels; ``pitch`` coords are in corner-origin meters,
+    i.e. x in 0..pitch_length, y in 0..pitch_width (NOT centered).
+    """
+    if not isinstance(obj, dict):
+        return "calibration must be an object"
+    for k in ("pitch_length", "pitch_width"):
+        v = obj.get(k)
+        if not isinstance(v, (int, float)) or v <= 0:
+            return f"{k} must be a positive number"
+    pts = obj.get("points")
+    if not isinstance(pts, list) or len(pts) < 4:
+        return "points must be a list of at least 4 correspondences"
+    seen = set()
+    for i, p in enumerate(pts):
+        if not isinstance(p, dict):
+            return f"point {i} must be an object"
+        pix, pit = p.get("pixel"), p.get("pitch")
+        if (not isinstance(pix, list) or len(pix) != 2
+                or not all(isinstance(v, (int, float)) for v in pix)):
+            return f"point {i}.pixel must be [x, y] numbers"
+        if (not isinstance(pit, list) or len(pit) != 2
+                or not all(isinstance(v, (int, float)) for v in pit)):
+            return f"point {i}.pitch must be [mx, my] numbers"
+        key = (round(float(pix[0]), 3), round(float(pix[1]), 3),
+               round(float(pit[0]), 3), round(float(pit[1]), 3))
+        if key in seen:
+            return f"point {i} duplicates an earlier correspondence"
+        seen.add(key)
+    return None
+
+
+@app.route("/api/calibration", methods=["GET"])
+def get_calibration():
+    with _lock:
+        return jsonify(_annotations.get("calibration", default_calibration()))
+
+
+@app.route("/api/calibration", methods=["PUT"])
+def put_calibration():
+    obj = request.get_json(silent=True)
+    if obj is None:
+        return jsonify({"error": "request body must be JSON"}), 400
+    err = _validate_calibration(obj)
+    if err:
+        return jsonify({"error": err}), 400
+    normalized = {
+        "pitch_length": float(obj["pitch_length"]),
+        "pitch_width": float(obj["pitch_width"]),
+        "points": [
+            {"pixel": [float(p["pixel"][0]), float(p["pixel"][1])],
+             "pitch": [float(p["pitch"][0]), float(p["pitch"][1])]}
+            for p in obj["points"]
+        ],
+    }
+    with _lock:
+        _annotations["calibration"] = normalized
+        _persist_locked()
+    return jsonify({"ok": True, "calibration": normalized})
 
 
 @app.route("/api/next_track_id")
@@ -202,10 +321,16 @@ def put_frame(i):
             "kick": ball.get("kick"),
         }
 
+    # Any box fully inside a persisted exclusion area is dropped before saving,
+    # so the containment invariant is maintained on every edit -- not just when
+    # an area is created/resized.
+    areas = _annotations.get("exclusion_areas", [])
+    removed = _purge_frame(normalized, areas)
+
     with _lock:
         _annotations["frames"][i] = normalized
         _persist_locked()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "removed": removed})
 
 
 @app.route("/api/delete_player", methods=["POST"])
@@ -311,6 +436,72 @@ def propagate_attr():
                     changed += 1
         _persist_locked()
     return jsonify({"ok": True, "changed": changed})
+
+
+@app.route("/api/exclusion_areas", methods=["POST"])
+def create_exclusion_area():
+    """Add a new exclusion area and immediately purge contained boxes.
+
+    The area definition persists in ``annotations.json`` and applies to every
+    frame. Existing boxes (players and ball) whose bbox is fully contained
+    inside the new area are removed from all frames as part of this call.
+    """
+    body = request.get_json(silent=True) or {}
+    bbox = body.get("bbox")
+    err = _validate_bbox(bbox)
+    if err:
+        return jsonify({"error": err}), 400
+    bbox = [float(v) for v in bbox]
+    with _lock:
+        areas = _annotations.setdefault("exclusion_areas", [])
+        aid = _next_area_id()
+        areas.append({"id": aid, "bbox": bbox})
+        removed = _purge_all(areas)
+        _persist_locked()
+    return jsonify({"id": aid, "removed": removed})
+
+
+@app.route("/api/exclusion_areas/<int:aid>", methods=["PUT"])
+def update_exclusion_area(aid):
+    """Move/resize an existing exclusion area; re-run the purge afterward.
+
+    Previously-purged boxes are not restored (they no longer exist in any
+    frame); only boxes that are now -- thanks to the geometry change -- fully
+    contained inside the area get removed.
+    """
+    body = request.get_json(silent=True) or {}
+    bbox = body.get("bbox")
+    err = _validate_bbox(bbox)
+    if err:
+        return jsonify({"error": err}), 400
+    bbox = [float(v) for v in bbox]
+    with _lock:
+        target = None
+        for a in _annotations.get("exclusion_areas", []):
+            if a["id"] == aid:
+                target = a
+                break
+        if target is None:
+            return jsonify({"error": "exclusion area not found"}), 404
+        target["bbox"] = bbox
+        removed = _purge_all(_annotations.get("exclusion_areas", []))
+        _persist_locked()
+    return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/exclusion_areas/<int:aid>", methods=["DELETE"])
+def delete_exclusion_area(aid):
+    """Remove an exclusion area definition. Boxes previously removed by it are
+    NOT restored -- they have already been deleted from the frames.
+    """
+    with _lock:
+        areas = _annotations.get("exclusion_areas", [])
+        new_areas = [a for a in areas if a["id"] != aid]
+        if len(new_areas) == len(areas):
+            return jsonify({"error": "exclusion area not found"}), 404
+        _annotations["exclusion_areas"] = new_areas
+        _persist_locked()
+    return jsonify({"ok": True})
 
 
 def main():
