@@ -47,6 +47,8 @@ const state = {
   calibration: { pitch_length: 105, pitch_width: 68, points: [] },  // global per-video; loaded from /api/calibration
   calibMode: false,     // when true, canvas clicks add calibration points and the sidebar shows the calibration panel
   calibDirty: false,
+  ballTrajectories: [], // [{id, start_frame, end_frame, max_height}] -- global per-video
+  arcMode: false,       // when true, the sidebar shows the ball-trajectory panel
 };
 
 const el = {};       // cached DOM nodes
@@ -174,6 +176,11 @@ function renderFrameTo(canvas, idx, annotation, opts = {}) {
       const sel = opts.selectable && state.selected && state.selected.type === "ball";
       drawBoxOn(ctx, scale, annotation.ball.bbox, COLORS.ball,
                  { label: "ball", selected: sel });
+    }
+    // Ball-in-air badge (current z derived from trajectories), only on the
+    // main canvas and only when the trajectory panel is open.
+    if (opts.selectable && state.arcMode && annotation === state.frame) {
+      drawArcBadge(ctx, scale);
     }
     // rubber-band preview for a box (or exclusion area) being drawn
     if (opts.selectable && state.mode === "drawing" && state.drag) {
@@ -701,6 +708,127 @@ function applyCalibPreset() {
   renderAll();
 }
 
+// ---- ball trajectories ---------------------------------------------------
+// Global per-video list of frame ranges where the ball is airborne, with a
+// max height. The exporter interpolates a parabola (z=0 at endpoints, max at
+// midpoint) for each range. Non-overlapping (enforced server-side), so every
+// frame has at most one z value.
+function toggleArcMode() {
+  state.arcMode = !state.arcMode;
+  el.arcBtn.classList.toggle("active", state.arcMode);
+  el.arcSection.classList.toggle("hidden", !state.arcMode);
+  setSelection(null);
+  if (state.arcMode) syncArcPanel();
+  renderAll();
+}
+
+function loadBallTrajectories() {
+  const t = (state.meta && state.meta.ball_trajectories) || [];
+  state.ballTrajectories = t.map((x) => ({
+    id: x.id,
+    start_frame: Number(x.start_frame),
+    end_frame: Number(x.end_frame),
+    max_height: Number(x.max_height),
+  }));
+}
+
+function syncArcPanel() {
+  el.arcList.innerHTML = "";
+  el.arcWarn.textContent = "";
+  el.arcStart.value = state.idx;
+  el.arcEnd.value = Math.min(state.idx + 5, state.meta.frame_count - 1);
+  el.arcHeight.value = "";
+  // Pre-fill start/end from the current frame, as a convenience.
+  state.ballTrajectories.forEach((t) => {
+    const li = document.createElement("li");
+    li.className = "arc-pt";
+    const mid = (t.start_frame + t.end_frame) / 2;
+    const peak = 4 * t.max_height * 0.5 * 0.5;
+    const lbl = document.createElement("span");
+    lbl.textContent = `#${t.id}: frames ${t.start_frame}\u2013${t.end_frame} · h=${t.max_height} m · peak z≈${peak.toFixed(2)} m (mid=${mid.toFixed(0)})`;
+    const del = document.createElement("button");
+    del.type = "button"; del.textContent = "\u2715"; del.className = "calib-del";
+    del.onclick = () => deleteTrajectory(t.id);
+    li.appendChild(lbl); li.appendChild(del);
+    el.arcList.appendChild(li);
+  });
+}
+
+async function addTrajectory() {
+  const s = parseInt(el.arcStart.value, 10);
+  const e = parseInt(el.arcEnd.value, 10);
+  const h = parseFloat(el.arcHeight.value);
+  if (Number.isNaN(s) || Number.isNaN(e)) { el.arcWarn.textContent = "Start and end frame are required."; return; }
+  if (Number.isNaN(h) || h <= 0) { el.arcWarn.textContent = "Max height must be a positive number."; return; }
+  if (e <= s) { el.arcWarn.textContent = "End frame must be greater than start frame."; return; }
+  setSaveStatus("saving");
+  try {
+    const r = await fetch("/api/ball_trajectories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_frame: s, end_frame: e, max_height: h }),
+    });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error"); el.arcWarn.textContent = `Add failed: ${msg}`; return;
+    }
+    const data = await r.json();
+    state.ballTrajectories.push(data);
+    setSaveStatus("saved"); el.arcWarn.textContent = "";
+    syncArcPanel(); renderAll();
+  } catch (err) {
+    setSaveStatus("error"); el.arcWarn.textContent = `Add failed: ${err}`;
+  }
+}
+
+async function deleteTrajectory(id) {
+  setSaveStatus("saving");
+  try {
+    const r = await fetch(`/api/ball_trajectories/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || r.status;
+      setSaveStatus("error"); el.arcWarn.textContent = `Delete failed: ${msg}`; return;
+    }
+  state.ballTrajectories = state.ballTrajectories.filter((t) => t.id !== id);
+    setSaveStatus("saved"); el.arcWarn.textContent = "";
+    syncArcPanel(); renderAll();
+  } catch (err) {
+    setSaveStatus("error"); el.arcWarn.textContent = `Delete failed: ${err}`;
+  }
+}
+
+// Render the ball's current z on the main canvas, derived from the
+// trajectories, so the human can see the height profile while scrubbing. Drawn
+// as a small "z=h" badge next to the ball box when the panel is open.
+function drawArcBadge(ctx, scale) {
+  if (!state.arcMode || !state.frame || !state.frame.ball) return;
+  const z = ballHeightAt(state.idx);
+  if (z <= 0.001) return;
+  const b = state.frame.ball.bbox;
+  const bx = (b[0] + b[2]) / 2 * scale, by = b[1] * scale;
+  ctx.save();
+  ctx.font = "bold 12px sans-serif";
+  const txt = `z=${z.toFixed(2)} m`;
+  const tw = ctx.measureText(txt).width;
+  ctx.fillStyle = "#30a46c";
+  ctx.fillRect(bx - tw/2 - 4, by - 18, tw + 8, 15);
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(txt, bx, by - 10.5);
+  ctx.restore();
+}
+
+function ballHeightAt(idx) {
+  for (const t of state.ballTrajectories) {
+    if (t.start_frame <= idx && idx <= t.end_frame) {
+      if (t.end_frame === t.start_frame) return 0;
+      const s = (idx - t.start_frame) / (t.end_frame - t.start_frame);
+      return 4 * t.max_height * s * (1 - s);
+    }
+  }
+  return 0;
+}
+
 // Refresh current frame + neighbors from the server, used after any change to
 // exclusion areas (which may have purged boxes across all frames).
 async function reloadAround() {
@@ -1170,7 +1298,9 @@ async function init() {
     "frameIds", "dupWarn", "ballTypeRadio", "deleteBtn", "invertBtn", "gkCheck",
     "areaBtn", "areaFields", "deleteAreaBtn",
     "calibBtn", "calibSection", "calibLen", "calibWid", "calibList", "calibHint",
-    "calibPreset", "calibSaveBtn", "calibWarn"];
+    "calibPreset", "calibSaveBtn", "calibWarn",
+    "arcBtn", "arcSection", "arcList", "arcStart", "arcEnd", "arcHeight",
+    "arcAddBtn", "arcWarn"];
   for (const id of ids) el[id] = document.getElementById(id);
 
   state.meta = await (await fetch("/api/meta")).json();
@@ -1178,6 +1308,7 @@ async function init() {
     id: a.id, bbox: a.bbox.map(Number),
   }));
   await loadCalibration();
+  loadBallTrajectories();
   el.videoName.textContent = state.meta.video;
   sizeCanvases();
 
@@ -1195,6 +1326,8 @@ async function init() {
   el.calibBtn.onclick = toggleCalibMode;
   el.calibSaveBtn.onclick = saveCalibration;
   el.calibPreset.onchange = applyCalibPreset;
+  el.arcBtn.onclick = toggleArcMode;
+  el.arcAddBtn.onclick = addTrajectory;
 
   el.metaForm.addEventListener("input", onFormInputLive);
   el.metaForm.addEventListener("change", onFormChange);

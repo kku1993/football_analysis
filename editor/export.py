@@ -181,6 +181,31 @@ def _interpolate_gaps(positions):
     return result
 
 
+def _ball_height_for_frame(trajectories, f):
+    """Ball z (meters off the ground) at frame ``f``.
+
+    Each trajectory is ``{"start_frame", "end_frame", "max_height"}``. Within a
+    trajectory the ball follows a parabola: z=0 at the endpoints (ball on the
+    ground) and z=max_height at the midpoint. We use the standard parametric
+    form ``z(s) = 4*h*s*(1-s)`` with ``s = (f-start)/(end-start)`` in [0,1],
+    which is the ballistic shape under constant gravity with no horizontal z
+    component. The endpoints are emitted as 0 (the ball is on the ground at the
+    kick instant and the landing instant), matching the schema assumption.
+
+    The server enforces non-overlapping ranges, so at most one trajectory
+    matches; frames outside every range stay on the ground (z=0).
+    """
+    for t in trajectories:
+        s0, s1 = t["start_frame"], t["end_frame"]
+        if s0 <= f <= s1:
+            h = float(t["max_height"])
+            if s1 == s0:
+                return 0.0
+            s = (f - s0) / float(s1 - s0)
+            return 4.0 * h * s * (1.0 - s)
+    return 0.0
+
+
 # --- camera movement -------------------------------------------------------
 def _first_video_frame(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -312,6 +337,13 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
     players_list = [{"id": tid, "role": player_role.get(tid, "Outfield")}
                     for tid in sorted(appearing, key=_id_sort_key)]
 
+    # --- Ball trajectories: per-video frame ranges the human marked as the
+    # ball being airborne, with a max height. Within each range the exporter
+    # fits a parabola (0 at the endpoints, max_height at the midpoint) so the
+    # schema's z field is filled for those frames. Outside any range the ball
+    # is on the ground (z=0). Players are always z=0 (see GENERALIZATION note).
+    ball_trajectories = ann.get("ball_trajectories") or []
+
     # --- Per-frame output.
     frames_out = []
     for f in range(n):
@@ -322,7 +354,8 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
         else:
             bx, by = 0.0, 0.0
             state = "OutOfBounds"
-        ball_obj = {"x": bx, "y": by, "state": state}
+        bz = _ball_height_for_frame(ball_trajectories, f) if bp is not None else 0.0
+        ball_obj = {"x": bx, "y": by, "z": bz, "state": state}
         kick = ball_kick[f]
         if isinstance(kick, dict) and (kick.get("byPlayerId") or kick.get("toPlayerId")):
             ball_obj["kick"] = kick
@@ -333,7 +366,7 @@ def export(annotations_path=ANNOTATIONS_PATH, output_path=DEFAULT_OUTPUT):
             if p is None:
                 continue
             x, y = _to_center_coords(p, offset)
-            frame_players.append({"id": tid, "team": player_team[tid], "x": x, "y": y})
+            frame_players.append({"id": tid, "team": player_team[tid], "x": x, "y": y, "z": 0.0})
 
         frames_out.append({"ball": ball_obj, "players": frame_players})
 

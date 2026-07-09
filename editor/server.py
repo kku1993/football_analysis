@@ -47,6 +47,10 @@ def _load_annotations():
     # Calibration is a global per-video edit. Older files predate it: fall back
     # to the sample default so the UI still has something to show / refine.
     _annotations.setdefault("calibration", default_calibration())
+    # Ball trajectories (per-video list of frame ranges the human marks as the
+    # ball being in the air, with a max height; the exporter interpolates a
+    # parabola for z within each range). Backfill on older files.
+    _annotations.setdefault("ball_trajectories", [])
 
 
 def _persist_locked():
@@ -187,6 +191,7 @@ def meta():
         "video": _annotations["video"],
         "exclusion_areas": _annotations.get("exclusion_areas", []),
         "calibration": _annotations.get("calibration"),
+        "ball_trajectories": _annotations.get("ball_trajectories", []),
     })
 
 
@@ -253,6 +258,119 @@ def put_calibration():
         _annotations["calibration"] = normalized
         _persist_locked()
     return jsonify({"ok": True, "calibration": normalized})
+
+
+def _overlaps_trajectory(start, end, trajectories, exclude_id=None):
+    """True when [start, end] overlaps any persisted trajectory range.
+
+    Overlap is closed (a shared endpoint is considered conflict) because each
+    frame must belong to at most one trajectory so the parabola z value is
+    unambiguous in the exporter. Pass ``exclude_id`` to skip the trajectory
+    being edited (PUT) so an in-place edit is allowed.
+    """
+    for t in trajectories:
+        if exclude_id is not None and t["id"] == exclude_id:
+            continue
+        if not (end < t["start_frame"] or start > t["end_frame"]):
+            return True
+    return False
+
+
+def _validate_ball_trajectory(obj, frame_count, trajectories, exclude_id=None):
+    """Return an error string, or None if valid. Used by POST/PUT below.
+
+    Shape: ``{"start_frame": int, "end_frame": int, "max_height": number}``.
+    The exporter fits a parabola that is 0 at the endpoints and ``max_height``
+    at the midpoint; the range must be inside the video and not overlap any
+    other persisted trajectory so every frame has at most one z value.
+    """
+    if not isinstance(obj, dict):
+        return "trajectory must be an object"
+    s = obj.get("start_frame")
+    e = obj.get("end_frame")
+    h = obj.get("max_height")
+    if (not isinstance(s, int) or isinstance(s, bool)
+            or not isinstance(e, int) or isinstance(e, bool)):
+        return "start_frame and end_frame must be integers"
+    if not (0 <= s < frame_count) or not (0 <= e < frame_count):
+        return "start_frame and end_frame must be within the frame range"
+    if e <= s:
+        return "end_frame must be greater than start_frame"
+    if not isinstance(h, (int, float)) or isinstance(h, bool) or h <= 0:
+        return "max_height must be a positive number"
+    if _overlaps_trajectory(s, e, trajectories, exclude_id=exclude_id):
+        return "frame range overlaps an existing ball trajectory"
+    return None
+
+
+def _next_trajectory_id():
+    mx = 0
+    for t in _annotations.get("ball_trajectories", []):
+        try:
+            mx = max(mx, int(t["id"]))
+        except (KeyError, ValueError, TypeError):
+            continue
+    return mx + 1
+
+
+@app.route("/api/ball_trajectories", methods=["GET"])
+def get_ball_trajectories():
+    with _lock:
+        return jsonify(_annotations.get("ball_trajectories", []))
+
+
+@app.route("/api/ball_trajectories", methods=["POST"])
+def create_ball_trajectory():
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        trajs = _annotations.setdefault("ball_trajectories", [])
+        err = _validate_ball_trajectory(body, _frame_count(), trajs)
+        if err:
+            return jsonify({"error": err}), 400
+        tid = _next_trajectory_id()
+        entry = {
+            "id": tid,
+            "start_frame": int(body["start_frame"]),
+            "end_frame": int(body["end_frame"]),
+            "max_height": float(body["max_height"]),
+        }
+        trajs.append(entry)
+        _persist_locked()
+    return jsonify(entry)
+
+
+@app.route("/api/ball_trajectories/<int:tid>", methods=["PUT"])
+def update_ball_trajectory(tid):
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        trajs = _annotations.get("ball_trajectories", [])
+        target = None
+        for t in trajs:
+            if t["id"] == tid:
+                target = t
+                break
+        if target is None:
+            return jsonify({"error": "ball trajectory not found"}), 404
+        err = _validate_ball_trajectory(body, _frame_count(), trajs, exclude_id=tid)
+        if err:
+            return jsonify({"error": err}), 400
+        target["start_frame"] = int(body["start_frame"])
+        target["end_frame"] = int(body["end_frame"])
+        target["max_height"] = float(body["max_height"])
+        _persist_locked()
+    return jsonify({"ok": True, "trajectory": target})
+
+
+@app.route("/api/ball_trajectories/<int:tid>", methods=["DELETE"])
+def delete_ball_trajectory(tid):
+    with _lock:
+        trajs = _annotations.get("ball_trajectories", [])
+        new_trajs = [t for t in trajs if t["id"] != tid]
+        if len(new_trajs) == len(trajs):
+            return jsonify({"error": "ball trajectory not found"}), 404
+        _annotations["ball_trajectories"] = new_trajs
+        _persist_locked()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/next_track_id")

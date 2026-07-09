@@ -19,6 +19,7 @@
     </div>
     <div class="actions">
       <button id="calibBtn" title="Toggle pitch-calibration mode (mark pixel -> pitch correspondences on frame 0)">⊕ Calibration</button>
+      <button id="arcBtn" title="Toggle ball-trajectory mode (mark frames where the ball is in the air)">⤓ Ball arc</button>
       <button id="areaBtn" title="Toggle exclusion-area drawing mode">⬚ Exclusion area</button>
       <button id="invertBtn" title="Swap Offence/Defence for every player in every frame">⇄ Invert teams</button>
     </div>
@@ -93,6 +94,26 @@
         </div>
         <button type="button" id="calibSaveBtn">Save calibration</button>
         <p class="warn" id="calibWarn"></p>
+      </section>
+
+      <section id="arcSection" class="hidden">
+        <h2>Ball trajectories</h2>
+        <p class="muted">Mark a frame range where the ball is in the air, plus the max height it reaches. The exporter fits a parabola: z = 0 at the two endpoints (kick &amp; landing) and z = max height at the midpoint. Ranges must not overlap.</p>
+        <ul id="arcList"></ul>
+        <div class="field">
+          <label>Start frame</label>
+          <input id="arcStart" type="number" min="0" step="1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>End frame</label>
+          <input id="arcEnd" type="number" min="0" step="1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Max height (m)</label>
+          <input id="arcHeight" type="number" min="0.01" step="0.01" autocomplete="off">
+        </div>
+        <button type="button" id="arcAddBtn">Add trajectory</button>
+        <p class="warn" id="arcWarn"></p>
       </section>
 
       <section id="formSection">

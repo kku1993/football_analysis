@@ -139,3 +139,15 @@ main {
 #calibList .calib-del:hover { background: #fbe9ea; }
 #calibPreset { width: 100%; margin-top: 4px; }
 #calibSaveBtn { margin-top: 8px; width: 100%; }
+
+/* Ball trajectories panel */
+#arcList { list-style: none; margin: 8px 0 4px; padding: 0; }
+#arcList .arc-pt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 4px; border-bottom: 1px solid #eef1f5; font-size: 13px;
+}
+#arcList .arc-pt > span { flex: 1 1 auto; }
+#arcList .arc-pt .calib-del { flex: 0 0 auto; }
+#arcSection input[type="number"] { width: 100%; }
+#arcSection .field { margin-bottom: 10px; }
+#arcAddBtn { margin-top: 4px; width: 100%; }
