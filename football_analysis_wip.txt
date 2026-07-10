@@ -1,0 +1,30 @@
+Usage: venv/bin/python -m editor.generate → venv/bin/python -m editor.server → edit in browser → venv/bin/python -m editor.export.
+
+
+
+❯ Can you make sure that when exporting the annotated results, we translate the coordinates to be relative to the center of the pitch (0, 0), with -x towards the left, +x towards the right, -y towards the top, and +y towards the bottom, and coordinates expressed in terms of meters. right now I believe, please verify, that the coordinates are relative to one of the corners in the processed footage. You can assume the football pitch is standard 105 meter long, 68 meter wide soccer pitch.
+
+Claude session with editor creation and positioning: dccb6027-9505-4ba5-a4f1-6401f98372ca
+
+
+            1453.4173583984375,
+            164.8129119873047,
+            1491.62890625,
+            227.6212921142578
+
+
+
+
+
+Found the bug — it's not in the export, it's in your calibration correspondences.
+3 of your 4 points share pitch x = 0 (i.e. they all sit on the left goal line):
+pt	pixel -> pitch
+1	(803, 135) -> (0, 0)
+2	(730, 221) -> (0, 9.15)
+3	(1183, 145) -> (9.15, 0)
+4	(123, 1021) -> (0, 58.85)
+getPerspectiveTransform needs to observe the along-pitch-length direction from at least two distinct pitch x values. With three corners pinned to x=0, the goal-line direction dominates and the matrix collapses — it predicts pitch x ≈ 0 for everything, including its own third input (which was supposed to map to (9.15, 0) but the fitted matrix maps it back to (0.000, 0.000)). Then export does raw - (52.5, 34), so every raw x≈0 becomes x≈-52.5 (the left goal line in centered coords), and _clip_to_pitch saturates y into [0, 68] → ±34 after centering. That's the "same position" you see for players 2/3/4: they're all pinned against the left goal line because the homography has no information about the length axis.
+It is unbiased noise for player 1 only because player 1's box actually sits near the calibrated pixel region and on the goal line itself, where the homography is least wrong.
+Two things to do
+1. Fix your calibration — mark at least one more correspondence with a different pitch x (a few landmarks with distinct x values: e.g. corner (0,0), penalty-spot (11,34), halfway-line spot (52.5, 34), far goal-area corner (99.5, 24.84)). Points 1/2/4 all on x=0 is the problem; you need the calibration region to span both axes.
+2. I should validate this so the UI/server rejects degenerate calibration instead of silently emitting garbage exports. Want me to add the check now? It would: require ≥2 distinct pitch x and ≥2 distinct pitch y among the points, plus a homography self-consistency check (reconstruct the fitted outputs and reject if RMSE > a tiny threshold — this would have caught your input because getPerspectiveTransform returns a matrix that doesn't even reproduce its own 4 targets).
