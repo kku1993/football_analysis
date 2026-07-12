@@ -7,11 +7,12 @@ import pandas as pd
 import cv2
 import sys 
 sys.path.append('../')
-from utils import get_center_of_bbox, get_bbox_width, get_foot_position
+from utils import get_center_of_bbox, get_bbox_width, get_foot_position, get_device
 
 class Tracker:
-    def __init__(self, model_path):
-        self.model = YOLO(model_path) 
+    def __init__(self, model_path, device=None):
+        self.model = YOLO(model_path)
+        self.device = device or get_device()
         self.tracker = sv.ByteTrack()
 
     def add_position_to_tracks(sekf,tracks):
@@ -41,7 +42,7 @@ class Tracker:
         batch_size=20 
         detections = [] 
         for i in range(0,len(frames),batch_size):
-            detections_batch = self.model.predict(frames[i:i+batch_size],conf=0.1)
+            detections_batch = self.model.predict(frames[i:i+batch_size],conf=0.1,device=self.device)
             detections += detections_batch
         return detections
 
