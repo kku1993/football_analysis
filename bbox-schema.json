@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+    "properties": {
+      "ball": {
+        "type": "object",
+        "description": "Bounding box for the ball",
+        "properties": {
+          "x_min": {
+            "type": "number",
+            "description": "Pixels"
+          },
+          "y_min": {
+            "type": "number",
+            "description": "Pixels"
+          },
+          "x_max": {
+            "type": "number",
+            "description": "Pixels"
+          },
+          "y_max": {
+            "type": "number",
+            "description": "Pixels"
+          }
+        },
+        "required": [
+          "x_min",
+          "x_max",
+          "y_min",
+          "y_max"
+        ]
+      },
+      "players": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": ""
+            },
+            "team": {
+              "type": "string",
+              "enum": [ "A", "B" ]
+            },
+            "x_min": {
+              "type": "number",
+              "description": "Pixels"
+            },
+            "y_min": {
+              "type": "number",
+              "description": "Pixels"
+            },
+            "x_max": {
+              "type": "number",
+              "description": "Pixels"
+            },
+            "y_max": {
+              "type": "number",
+              "description": "Pixels"
+            }
+          },
+          "required": [
+            "id",
+            "team",
+            "x_min",
+            "x_max",
+            "y_min",
+            "y_max"
+          ]
+        }
+      }
+    },
+    "required": [
+      "ball",
+      "players"
+    ]
+  }
+}
