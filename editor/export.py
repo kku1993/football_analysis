@@ -224,12 +224,23 @@ def build_ball_track(keyframes, tracks, lo, n):
     for i, b in bkfs:
         ball[i - lo] = (b["x"], b["y"], b["z"], b["state"])
 
+    # The ball is either "in flight" (kicked, following its trajectory) or in a
+    # player's possession. It enters flight at a kick (kick.byPlayerId) and
+    # stays in flight across subsequent segments until a keyframe marks a
+    # reception (kick.toPlayerId) -- so a kick that spans several ball keyframes
+    # before reaching the goal keeps flying instead of snapping back to the
+    # nearest player in between.
+    in_flight = False
     for (i, ba), (j, bb) in zip(bkfs, bkfs[1:]):
+        kick = ba.get("kick") or {}
+        if kick.get("byPlayerId"):
+            in_flight = True
+        elif kick.get("toPlayerId"):
+            in_flight = False
         steps = j - i
         if steps <= 1:
             continue
-        kicked = bool(ba.get("kick") and ba["kick"].get("byPlayerId"))
-        if kicked:
+        if in_flight:
             fill_pass(ball, ba, bb, i - lo, steps)
         else:
             fill_possession(ball, ba, bb, tracks, i - lo, steps)
