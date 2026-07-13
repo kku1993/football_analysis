@@ -33,12 +33,15 @@ let overlayTimer = null;
 let selected = null;        // {kind:"player"|"ball", id?} of selected box
 let pendingAdd = null;      // "player" | "ball" | null
 let isolation = false;
+let boxSearch = "";         // filter term for the box list
 const homoCache = {};       // frameName -> 3x3 matrix | null
 let homoTimer = null;
 
 const DOT_HIT_PX = 12;
 const HANDLE_PX = 7;
-const TEAM_COLOR = { A: "#3aa0ff", B: "#ff6b6b" };
+// High-contrast against the green pitch (and distinct from the yellow ball).
+const TEAM_COLOR = { A: "#00e0ff", B: "#ff2ec4" };
+const BALL_COLOR = "#ffd94a";
 
 // ---------- pitch landmarks (known-point picker) ----------
 const PITCH_POINTS = (() => {
@@ -233,14 +236,15 @@ function drawBoxes() {
     if (isolation && selected && !isSelected(ref)) return;
     const p1 = toCanvas(b.x_min, b.y_min), p2 = toCanvas(b.x_max, b.y_max);
     const sel = isSelected(ref);
-    let color;
-    if (ref.kind === "ball") color = "#ffd94a";
-    else color = TEAM_COLOR[playerMeta(ref.id).team] || "#aaa";
-    ctx.strokeStyle = color; ctx.lineWidth = sel ? 3 : 1.5;
+    const color = ref.kind === "ball" ? BALL_COLOR
+      : (TEAM_COLOR[playerMeta(ref.id).team] || "#aaa");
+    ctx.strokeStyle = color; ctx.lineWidth = sel ? 3 : 2;
     ctx.strokeRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
-    // label
+    // label with a dark outline so it stays legible on any background
     const lbl = ref.kind === "ball" ? "ball"
       : `${ref.id} ${state.teamMapping[playerMeta(ref.id).team][0]}`;
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.75)";
+    ctx.strokeText(lbl, p1.x, p1.y - 3);
     ctx.fillStyle = color;
     ctx.fillText(lbl, p1.x, p1.y - 3);
     // anchor marker
@@ -320,7 +324,9 @@ canvas.addEventListener("mousemove", (e) => {
     if (c.includes("min-x")) b.x_min = ip.x; if (c.includes("max-x")) b.x_max = ip.x;
     if (c.includes("min-y")) b.y_min = ip.y; if (c.includes("max-y")) b.y_max = ip.y;
     draw(); renderSelectedPanel(); scheduleSave();
-  } else if (mouse.moved && !mouse.grab && mouse.mode == null) {
+  } else if (mouse.moved && mouse.mode == null) {
+    // pan the frame (calib: not dragging a dot; boxes: not on a box). The
+    // pitch overlay / dots redraw in the new view automatically.
     view.ox += cx - mouse.sx; view.oy += cy - mouse.sy;
     mouse.sx = cx; mouse.sy = cy; draw();
   }
@@ -612,7 +618,40 @@ function renderBoxesPanel() {
   $("teamA-toggle").textContent = state.teamMapping.A;
   $("teamB-note").textContent = `Team B = ${state.teamMapping.B}`;
   renderSelectedPanel();
+  renderBoxList();
   renderCorrectSets();
+}
+
+// ---------- box list + search ----------
+function boxItems() {
+  const fs = frameState(curFrame);
+  const items = fs.players.map((b) => ({
+    ref: { kind: "player", id: b.id }, key: b.id,
+    label: `${b.id} ${state.teamMapping[playerMeta(b.id).team][0]}`,
+    color: TEAM_COLOR[playerMeta(b.id).team] || "#aaa",
+  }));
+  items.sort((a, b) => (parseInt(a.key, 10) || 0) - (parseInt(b.key, 10) || 0));
+  if (fs.ball) items.push({ ref: { kind: "ball" }, key: "ball", label: "ball", color: BALL_COLOR });
+  return items;
+}
+function selectBox(ref) { selected = ref; renderSidebar(); draw(); }
+function renderBoxList() {
+  const term = boxSearch.trim().toLowerCase();
+  let items = boxItems();
+  if (term) items = items.filter((it) => it.label.toLowerCase().includes(term));
+  // narrowing to a single box auto-selects it
+  if (term && items.length === 1 && !isSelected(items[0].ref)) selected = items[0].ref;
+
+  const list = $("box-list"); list.innerHTML = "";
+  if (!items.length) { list.innerHTML = '<div class="muted">no match</div>'; return; }
+  items.forEach((it) => {
+    const row = document.createElement("div");
+    row.className = "box-row" + (isSelected(it.ref) ? " selected" : "");
+    row.innerHTML = `<span class="sw" style="background:${it.color}"></span>${it.label}`;
+    row.onclick = () => selectBox(it.ref);
+    list.appendChild(row);
+  });
+  renderSelectedPanel();
 }
 function updateHomoWarn() {
   $("homography-warn").textContent = homoCache[curFrame]
@@ -696,12 +735,20 @@ function renderCorrectSets() {
   ed.innerHTML = `<div class="field">off <input id="cs-off" placeholder="1,2,3"></div>
     <div class="field">def <input id="cs-def" placeholder="4,5,6"></div>
     <div class="field">end <select id="cs-end"><option value="">(all subsequent)</option>${labelFrames().map((n) => `<option value="${n}">${frameIndex(n)}</option>`).join("")}</select></div>
-    <button id="cs-add">Add set from frame ${frameIndex(curFrame)}</button>`;
-  $("cs-add").onclick = () => {
-    const parse = (s) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
-    state.correctSets.push({ offence: parse($("cs-off").value), defence: parse($("cs-def").value),
-                             start: curFrame, end: $("cs-end").value || null });
+    <button id="cs-add-current">+ Add current boxes as set (frame ${frameIndex(curFrame)})</button>
+    <button id="cs-add">Add typed set from frame ${frameIndex(curFrame)}</button>`;
+  const parse = (s) => s.split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+  const addSet = (offence, defence) => {
+    state.correctSets.push({ offence, defence, start: curFrame, end: $("cs-end").value || null });
     renderSidebar(); scheduleSave();
+  };
+  $("cs-add").onclick = () => addSet(parse($("cs-off").value), parse($("cs-def").value));
+  $("cs-add-current").onclick = () => {
+    // group this frame's player boxes by their offence/defence mapping
+    const off = [], def = [];
+    for (const b of frameState(curFrame).players)
+      (state.teamMapping[playerMeta(b.id).team] === "Offence" ? off : def).push(b.id);
+    addSet(off, def);
   };
   const sets = $("correct-sets"); sets.innerHTML = "";
   state.correctSets.forEach((s, i) => {
@@ -722,9 +769,16 @@ function renderFlagged() {
   box.appendChild(title);
   flagged.forEach(([n, f]) => {
     const line = document.createElement("div"); line.className = "flagline";
+    const set = applicableSet(n);
+    // team letter from the roster spec for missing ids, from player meta for extras
+    const specTeam = (id) => set.offence.map(String).includes(id) ? "O"
+      : (set.defence.map(String).includes(id) ? "D" : "?");
+    const metaTeam = (id) => state.players[id]
+      ? state.teamMapping[state.players[id].team][0] : "?";
+    const tag = (id, fn) => `${id}(${fn(id)})`;
     const parts = [];
-    if (f.missing.length) parts.push("missing " + f.missing.join(","));
-    if (f.extra.length) parts.push("extra " + f.extra.join(","));
+    if (f.missing.length) parts.push("missing " + f.missing.map((id) => tag(id, specTeam)).join(", "));
+    if (f.extra.length) parts.push("extra " + f.extra.map((id) => tag(id, metaTeam)).join(", "));
     const btn = document.createElement("button"); btn.className = "seg-sm";
     btn.textContent = `frame ${frameIndex(n)}`; btn.onclick = () => loadFrame(n);
     line.appendChild(btn);
@@ -765,6 +819,7 @@ function wireControls() {
   $("add-player").onclick = () => { pendingAdd = "player"; $("export-status").textContent = "click on the frame to place the new player"; };
   $("add-ball").onclick = () => { pendingAdd = "ball"; $("export-status").textContent = "click on the frame to place the ball"; };
   $("isolation-toggle").onchange = (e) => { isolation = e.target.checked; draw(); };
+  $("box-search").oninput = (e) => { boxSearch = e.target.value; renderBoxList(); };
   $("teamA-toggle").onclick = () => {
     state.teamMapping.A = state.teamMapping.A === "Offence" ? "Defence" : "Offence";
     state.teamMapping.B = state.teamMapping.A === "Offence" ? "Defence" : "Offence";

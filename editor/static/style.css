@@ -86,6 +86,15 @@ label.toggle input { margin: 0; }
 .team-map { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .add-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
 
+#box-search { width: 100%; background: #14151a; color: #e7e7ea;
+  border: 1px solid #3a3e47; border-radius: 4px; padding: 4px 6px; font: inherit; margin: 4px 0; }
+#box-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 150px; overflow-y: auto; }
+.box-row { display: flex; align-items: center; gap: 5px; padding: 3px 7px;
+  border-radius: 4px; background: #14151a; border: 1px solid #2c2f36; cursor: pointer; font: 12px monospace; }
+.box-row:hover { background: #22242b; }
+.box-row.selected { outline: 2px solid #fff176; background: #2b3550; }
+.box-row .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
 .set-row { background: #14151a; font-size: 12px; }
 #flagged .flagline { margin: 3px 0; }
 #export-status { white-space: pre-wrap; font-size: 12px; margin-top: 6px; }
