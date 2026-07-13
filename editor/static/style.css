@@ -1,0 +1,94 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 13px/1.45 system-ui, sans-serif;
+  color: #e7e7ea; background: #16171b;
+}
+#layout { display: flex; height: 100vh; }
+
+#canvas-wrap { position: relative; flex: 1; background: #0c0d10; overflow: hidden; }
+#canvas { display: block; width: 100%; height: 100%; }
+#hud, #mode-badge {
+  position: absolute; padding: 2px 8px; border-radius: 4px;
+  background: rgba(0,0,0,.6); font: 12px monospace; pointer-events: none;
+}
+#hud { left: 8px; bottom: 8px; }
+#mode-badge { right: 8px; top: 8px; font-weight: 600; }
+
+#sidebar {
+  width: 360px; flex: none; padding: 12px 14px; overflow-y: auto;
+  background: #1d1f24; border-left: 1px solid #2c2f36;
+}
+h3 { font-size: 14px; margin: 14px 0 6px; }
+h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+     color: #9aa0aa; margin: 14px 0 4px; }
+.hint { font-size: 11.5px; color: #8b909a; margin: 4px 0 8px; }
+.muted { color: #9aa0aa; font-size: 12px; }
+.warn { color: #ffb454; font-size: 12px; margin: 4px 0; }
+hr { border: none; border-top: 1px solid #2c2f36; margin: 16px 0 10px; }
+
+button {
+  font: inherit; color: #e7e7ea; background: #2b2e35; border: 1px solid #3a3e47;
+  border-radius: 6px; padding: 6px 10px; cursor: pointer;
+}
+button:hover { background: #343842; }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: #2f6feb; border-color: #2f6feb; width: 100%; margin-top: 8px; }
+button.primary:hover { background: #3d7bf5; }
+.seg.active { background: #2f6feb; border-color: #2f6feb; }
+.seg-sm { padding: 3px 8px; }
+
+.nav-row { display: flex; align-items: center; gap: 8px; }
+.nav-row #frame-label { flex: 1; text-align: center; font-weight: 600; }
+.mode-row { display: flex; gap: 6px; margin: 8px 0; }
+.mode-row .seg { flex: 1; }
+.mode-row #back-select { flex: none; }
+
+.toggle { display: flex; align-items: center; gap: 6px; margin: 8px 0; cursor: pointer; }
+.toggle.inline { margin: 0; }
+label.toggle input { margin: 0; }
+
+#toprocess-strip {
+  display: flex; flex-wrap: wrap; gap: 3px; margin: 8px 0; max-height: 120px; overflow-y: auto;
+}
+.chip {
+  font: 11px monospace; padding: 2px 5px; border-radius: 3px;
+  background: #2b2e35; border: 1px solid #3a3e47; cursor: pointer;
+}
+.chip.on { background: #2f6feb; border-color: #2f6feb; }
+.chip.cur { outline: 2px solid #fff176; }
+.chip.flag { border-color: #ff5a5a; color: #ff9a9a; }
+
+.dot-row, .set-row {
+  display: flex; align-items: center; gap: 4px; padding: 3px 4px;
+  border-radius: 4px; margin: 2px 0;
+}
+.dot-row.selected { background: #2b3550; }
+.dot-row .idx { width: 18px; color: #9aa0aa; }
+.dot-row input, #selected-panel input, #correct-editor input {
+  width: 62px; background: #14151a; color: #e7e7ea;
+  border: 1px solid #3a3e47; border-radius: 4px; padding: 2px 4px; font: inherit;
+}
+#selected-panel input.wide { width: 100%; }
+.dot-row .del, .set-row .del { margin-left: auto; padding: 1px 7px; }
+
+#pitch-map svg { width: 100%; height: auto; background: #12331d; border-radius: 6px; }
+.pl { fill: none; stroke: #4c8a5e; stroke-width: .4; }
+.lm { fill: #e8b93c; cursor: pointer; }
+.lm.placed { fill: #4caf50; }
+.lm.armed { fill: #fff176; stroke: #fff; stroke-width: .6; }
+
+#selected-panel { padding: 8px; background: #14151a; border-radius: 6px; margin: 8px 0; }
+#selected-panel.active { color: #e7e7ea; }
+#selected-panel .field { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+#selected-panel .field label { width: 70px; color: #9aa0aa; }
+#selected-panel .xy { font: 12px monospace; color: #7fd1a0; }
+.team-map { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.add-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+
+.set-row { background: #14151a; font-size: 12px; }
+#flagged .flagline { margin: 3px 0; }
+#export-status { white-space: pre-wrap; font-size: 12px; margin-top: 6px; }
+#export-status.error { color: #ff8a8a; }
+select { background: #14151a; color: #e7e7ea; border: 1px solid #3a3e47;
+         border-radius: 4px; padding: 2px 4px; font: inherit; }

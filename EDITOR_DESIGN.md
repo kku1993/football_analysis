@@ -86,6 +86,8 @@ Save the state in a file called `label-system-state.json` within the data direct
 
 See input_videos/eng-nor-49-offside-no-goal.mp4
 
+In the sample data, there should be 8 England players (white, offence) and 9 Norway players (red, defence) + 1 Norway goal keeper (green).
+
 ## Tech stack
 
 - Use a simple python backend

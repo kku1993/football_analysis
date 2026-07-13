@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Football Label Editor</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="layout">
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="hud"></div>
+    <div id="mode-badge"></div>
+  </div>
+
+  <div id="sidebar">
+    <div class="nav-row">
+      <button id="prev" title="previous frame (←)">&larr;</button>
+      <span id="frame-label"></span>
+      <button id="next" title="next frame (→)">&rarr;</button>
+    </div>
+    <div id="status-line" class="muted"></div>
+
+    <!-- ---- phase 1: selection ---- -->
+    <section id="select-panel">
+      <h3>1 &middot; Select frames to process</h3>
+      <p class="hint">Browse every frame with &larr;/&rarr;. Press
+        <b>Space</b> (or the button) to mark the current frame for processing.
+        Selected frames may be non-consecutive.</p>
+      <label class="toggle"><input type="checkbox" id="toprocess-toggle">
+        Mark this frame &ldquo;to process&rdquo;</label>
+      <div id="toprocess-summary" class="muted"></div>
+      <div id="toprocess-strip"></div>
+      <button id="start-label" class="primary">Start labeling &rarr;</button>
+    </section>
+
+    <!-- ---- phase 2: labeling ---- -->
+    <section id="label-panel" hidden>
+      <div class="mode-row">
+        <button id="mode-calib" class="seg">Calibration</button>
+        <button id="mode-boxes" class="seg">Boxes</button>
+        <button id="back-select" title="back to frame selection">&#9776;</button>
+      </div>
+
+      <!-- calibration sub-panel -->
+      <div id="calib-sub">
+        <div id="calib-status" class="muted"></div>
+        <h4>Known points</h4>
+        <p class="hint">Click a landmark on the map, then click its spot on the
+          frame &mdash; the dot gets that point's pitch coordinates. Green =
+          already placed. Esc cancels.</p>
+        <div id="pitch-map"></div>
+        <div id="pick-status" class="muted"></div>
+        <h4>Calibration dots</h4>
+        <p class="hint">Or click the frame to drop a dot and type its meters.
+          Center of pitch = (0,0); +x right, +y up. Need 4+ per frame. Drag to
+          adjust; scroll to zoom, drag empty space to pan.</p>
+        <div id="dots-list"></div>
+        <button id="copy-prev-dots">Copy dots from previous to-process frame</button>
+        <label class="toggle"><input type="checkbox" id="overlay-toggle">
+          Show pitch overlay (projected lines should match the real ones)</label>
+      </div>
+
+      <!-- boxes sub-panel -->
+      <div id="boxes-sub" hidden>
+        <div id="homography-warn" class="warn"></div>
+        <div class="team-map">
+          <span>Team A =</span>
+          <button id="teamA-toggle" class="seg-sm"></button>
+          <span class="muted" id="teamB-note"></span>
+        </div>
+        <div class="add-row">
+          <button id="add-player">+ Player</button>
+          <button id="add-ball">+ Ball</button>
+          <label class="toggle inline"><input type="checkbox" id="isolation-toggle">
+            Isolate selected</label>
+        </div>
+        <div id="selected-panel" class="muted">No box selected.</div>
+
+        <h4>Correct rosters</h4>
+        <p class="hint">Define the offence/defence ids that should appear.
+          Frames in range missing or with extra ids get flagged below.</p>
+        <div id="correct-editor"></div>
+        <div id="correct-sets"></div>
+        <div id="flagged"></div>
+      </div>
+    </section>
+
+    <hr>
+    <div id="save-status" class="muted"></div>
+    <button id="export" class="primary">Export tracking.json</button>
+    <div id="export-status"></div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
